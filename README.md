@@ -24,6 +24,19 @@ Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/heal
 - `GET /api/courses`: danh sách khóa học đang mở.
 - `GET /api/courses/all`: toàn bộ khóa học, chỉ quản trị viên.
 - `POST/PATCH/DELETE /api/courses`: quản lý khóa học, chỉ quản trị viên.
+- `GET/POST/PATCH /api/users`: quản lý giáo viên, học viên và trạng thái tài khoản.
+- `GET/POST/PATCH/DELETE /api/rooms`: quản lý phòng học.
+- `GET/POST/PATCH /api/classes`: quản lý lớp và phân công giáo viên.
+- `GET/POST/PATCH /api/enrollments`: ghi danh, xếp lớp và tự tạo hóa đơn.
+- `GET/POST/PATCH/DELETE /api/schedules`: xếp lịch, kiểm tra trùng phòng/giáo viên.
+- `POST /api/classes/:id/generate-sessions`: sinh các buổi học từ lịch hàng tuần.
+- `GET /api/teacher/dashboard|classes|sessions`: dữ liệu giảng dạy của giáo viên đăng nhập.
+- `GET/PUT /api/teacher/sessions/:id/attendance`: xem và lưu điểm danh cả lớp.
+- `GET/POST /api/teacher/classes/:id/exams`: xem và tạo kỳ thi cho lớp phụ trách.
+- `GET/PUT /api/teacher/exams/:id/results`: xem và lưu điểm bốn kỹ năng.
+- `GET /api/student/dashboard|classes|sessions`: tổng quan và lịch học của học viên đăng nhập.
+- `GET /api/student/results|invoices|certificates`: kết quả, học phí và chứng chỉ cá nhân.
+- `POST /api/student/certificates/:id/download`: ghi nhận và trả thông tin tải chứng chỉ PDF.
 - `POST /api/ai/tu-van-khoa-hoc`: AI tư vấn từ khóa học đang mở trong MySQL.
 
 API cần đăng nhập sử dụng header `Authorization: Bearer <JWT>`.
@@ -38,6 +51,7 @@ API cần đăng nhập sử dụng header `Authorization: Bearer <JWT>`.
 
 ```bash
 npm run type-check
+npm test
 npm run build
 npm start
 ```

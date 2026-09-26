@@ -10,6 +10,7 @@ export const database = mysql.createPool({
   charset: 'utf8mb4',
   connectionLimit: 10,
   decimalNumbers: true,
+  dateStrings: true,
 })
 
 export async function checkDatabase(): Promise<void> {

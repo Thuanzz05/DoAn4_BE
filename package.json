@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "type-check": "tsc --noEmit",
+    "test": "tsx --test src/**/*.test.ts",
     "create-admin": "tsx src/scripts/create-admin.ts"
   },
   "dependencies": {
