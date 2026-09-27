@@ -21,6 +21,10 @@ Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/heal
 - `POST /api/auth/forgot-password`: gửi OTP đặt lại mật khẩu qua email.
 - `POST /api/auth/reset-password`: xác nhận OTP và đổi mật khẩu.
 - `GET /api/auth/me`: thông tin tài khoản hiện tại.
+- `PATCH /api/auth/me`: cập nhật họ tên, số điện thoại và ngày sinh.
+- `PATCH /api/auth/password`: đổi hoặc đặt mật khẩu, đồng thời vô hiệu hóa JWT cũ.
+- `POST /api/auth/logout`: đăng xuất và vô hiệu hóa các phiên đăng nhập hiện tại.
+- `DELETE /api/auth/google/link`: gỡ liên kết Google khi tài khoản đã có mật khẩu.
 - `GET /api/courses`: danh sách khóa học đang mở.
 - `GET /api/courses/all`: toàn bộ khóa học, chỉ quản trị viên.
 - `POST/PATCH/DELETE /api/courses`: quản lý khóa học, chỉ quản trị viên.

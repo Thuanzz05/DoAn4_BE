@@ -9,6 +9,7 @@ import { database } from '../config/database'
 import { env } from '../config/env'
 import { requireAuth } from '../middlewares/auth'
 import { sendPasswordResetCode } from '../services/mailer'
+import { isValidBirthDate, isValidPassword } from '../utils/account'
 import { HttpError } from '../utils/http-error'
 
 type VaiTro = 'quan_tri' | 'giao_vien' | 'hoc_vien'
@@ -23,6 +24,9 @@ type UserRow = RowDataPacket & {
   vai_tro: VaiTro
   dang_hoat_dong: number
   phien_ban_dang_nhap: number
+  ngay_sinh: string | null
+  ngon_ngu_giang_day: string | null
+  chuyen_mon: string | null
 }
 type ResetRow = RowDataPacket & {
   id: number
@@ -66,6 +70,10 @@ function publicUser(user: UserRow) {
     phone: user.so_dien_thoai,
     role: user.vai_tro,
     hasGoogle: Boolean(user.google_sub),
+    hasPassword: Boolean(user.mat_khau_bam),
+    birthDate: user.ngay_sinh,
+    teachingLanguage: user.ngon_ngu_giang_day,
+    specialty: user.chuyen_mon,
   }
 }
 
@@ -110,9 +118,9 @@ authRouter.post('/register', authLimiter, async (request, response) => {
 
   if (!emailPattern.test(email)) throw new HttpError(400, 'Email không hợp lệ')
   if (!phonePattern.test(phone)) throw new HttpError(400, 'Số điện thoại phải gồm 10 chữ số')
-  if (password.length < 8) throw new HttpError(400, 'Mật khẩu phải có ít nhất 8 ký tự')
-  if (birthDate !== null && (typeof birthDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(birthDate))) {
-    throw new HttpError(400, 'Ngày sinh phải có định dạng YYYY-MM-DD')
+  if (!isValidPassword(password)) throw new HttpError(400, 'Mật khẩu phải có ít nhất 8 ký tự')
+  if (birthDate !== null && !isValidBirthDate(birthDate)) {
+    throw new HttpError(400, 'Ngày sinh không hợp lệ')
   }
 
   const passwordHash = await bcrypt.hash(password, 12)
@@ -220,7 +228,7 @@ authRouter.post('/reset-password', resetLimiter, async (request, response) => {
   const code = requiredString(request.body.code, 'Mã xác nhận')
   const newPassword = requiredString(request.body.newPassword, 'Mật khẩu mới')
   if (!/^\d{6}$/.test(code)) throw new HttpError(400, 'Mã xác nhận phải gồm 6 chữ số')
-  if (newPassword.length < 8) throw new HttpError(400, 'Mật khẩu phải có ít nhất 8 ký tự')
+  if (!isValidPassword(newPassword)) throw new HttpError(400, 'Mật khẩu phải có ít nhất 8 ký tự')
 
   const [rows] = await database.query<ResetRow[]>(
     `SELECT m.id, m.nguoi_dung_id, m.ma_hmac, m.so_lan_nhap_sai
@@ -267,4 +275,62 @@ authRouter.post('/reset-password', resetLimiter, async (request, response) => {
 authRouter.get('/me', requireAuth, async (request, response) => {
   const [rows] = await database.query<UserRow[]>('SELECT * FROM nguoi_dung WHERE id = ?', [request.auth!.userId])
   response.json({ success: true, data: publicUser(rows[0]) })
+})
+
+authRouter.patch('/me', requireAuth, async (request, response) => {
+  const [rows] = await database.query<UserRow[]>('SELECT * FROM nguoi_dung WHERE id = ?', [request.auth!.userId])
+  const user = rows[0]
+  const fullName = request.body.fullName === undefined ? user.ho_ten : requiredString(request.body.fullName, 'Họ tên')
+  const phone = request.body.phone === undefined ? user.so_dien_thoai : requiredString(request.body.phone, 'Số điện thoại').replace(/\s/g, '')
+  const birthDate = request.body.birthDate === undefined ? user.ngay_sinh : request.body.birthDate || null
+  if (phone && !phonePattern.test(phone)) throw new HttpError(400, 'Số điện thoại phải gồm 10 chữ số')
+  if (birthDate !== null && !isValidBirthDate(birthDate)) throw new HttpError(400, 'Ngày sinh không hợp lệ')
+  try {
+    await database.execute(
+      'UPDATE nguoi_dung SET ho_ten = ?, so_dien_thoai = ?, ngay_sinh = ? WHERE id = ?',
+      [fullName, phone, birthDate, user.id],
+    )
+  } catch (error) {
+    if ((error as { code?: string }).code === 'ER_DUP_ENTRY') throw new HttpError(409, 'Số điện thoại đã được sử dụng')
+    throw error
+  }
+  const [updated] = await database.query<UserRow[]>('SELECT * FROM nguoi_dung WHERE id = ?', [user.id])
+  response.json({ success: true, data: publicUser(updated[0]) })
+})
+
+authRouter.patch('/password', requireAuth, async (request, response) => {
+  const currentPassword = typeof request.body.currentPassword === 'string' ? request.body.currentPassword : ''
+  const newPassword = request.body.newPassword
+  if (!isValidPassword(newPassword)) throw new HttpError(400, 'Mật khẩu mới phải có ít nhất 8 ký tự')
+  const [rows] = await database.query<UserRow[]>('SELECT * FROM nguoi_dung WHERE id = ?', [request.auth!.userId])
+  const user = rows[0]
+  if (user.mat_khau_bam && !await bcrypt.compare(currentPassword, user.mat_khau_bam)) {
+    throw new HttpError(401, 'Mật khẩu hiện tại không chính xác')
+  }
+  if (user.mat_khau_bam && await bcrypt.compare(newPassword, user.mat_khau_bam)) {
+    throw new HttpError(400, 'Mật khẩu mới phải khác mật khẩu hiện tại')
+  }
+  const passwordHash = await bcrypt.hash(newPassword, 12)
+  await database.execute(
+    'UPDATE nguoi_dung SET mat_khau_bam = ?, phien_ban_dang_nhap = phien_ban_dang_nhap + 1 WHERE id = ?',
+    [passwordHash, user.id],
+  )
+  response.json({ success: true, message: 'Đã đổi mật khẩu. Vui lòng đăng nhập lại.' })
+})
+
+authRouter.post('/logout', requireAuth, async (request, response) => {
+  await database.execute(
+    'UPDATE nguoi_dung SET phien_ban_dang_nhap = phien_ban_dang_nhap + 1 WHERE id = ?',
+    [request.auth!.userId],
+  )
+  response.json({ success: true, message: 'Đã đăng xuất' })
+})
+
+authRouter.delete('/google/link', requireAuth, async (request, response) => {
+  const [rows] = await database.query<UserRow[]>('SELECT * FROM nguoi_dung WHERE id = ?', [request.auth!.userId])
+  const user = rows[0]
+  if (!user.google_sub) throw new HttpError(409, 'Tài khoản chưa liên kết Google')
+  if (!user.mat_khau_bam) throw new HttpError(409, 'Hãy đặt mật khẩu trước khi gỡ liên kết Google')
+  await database.execute('UPDATE nguoi_dung SET google_sub = NULL WHERE id = ?', [user.id])
+  response.json({ success: true, message: 'Đã gỡ liên kết tài khoản Google' })
 })
