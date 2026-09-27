@@ -4,7 +4,7 @@ import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { database } from '../config/database'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { HttpError } from '../utils/http-error'
-import { getReportPeriod, isCertificateEligible } from '../utils/operations'
+import { getCertificateEligibilityReasons, getReportPeriod, isCertificateEligible } from '../utils/operations'
 
 type SimpleRow = RowDataPacket & Record<string, string | number | null>
 type PaymentMethod = 'tien_mat' | 'chuyen_khoan'
@@ -198,15 +198,15 @@ operationsRouter.get('/certificates/candidates', async (_request, response) => {
   const [rows] = await database.query<CandidateRow[]>(`${candidateSelect} ORDER BY gd.id DESC`)
   response.json({
     success: true,
-    data: rows.map((item) => ({
-      ...item,
-      eligible: isCertificateEligible({
+    data: rows.map((item) => {
+      const input = {
         enrollmentStatus: item.enrollmentStatus,
         paid: Boolean(item.paid),
         attendance: Number(item.attendance),
         average: item.average === null ? null : Number(item.average),
-      }),
-    })),
+      }
+      return { ...item, eligible: isCertificateEligible(input), ineligibleReasons: getCertificateEligibilityReasons(input) }
+    }),
   })
 })
 

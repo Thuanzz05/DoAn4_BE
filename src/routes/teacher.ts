@@ -218,7 +218,12 @@ teacherRouter.get('/exams/:id/results', async (request, response) => {
         ELSE ROUND((kq.nghe + kq.noi + kq.doc + kq.viet) / 4, 2) END AS average
      FROM ghi_danh gd JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
      LEFT JOIN ket_qua_thi kq ON kq.ghi_danh_id = gd.id AND kq.ky_thi_id = ?
-     WHERE gd.lop_hoc_id = ? AND gd.trang_thai <> 'da_huy' ORDER BY hv.ho_ten`,
+     WHERE gd.lop_hoc_id = ? AND gd.trang_thai <> 'da_huy'
+       AND EXISTS (SELECT 1 FROM hoa_don hd
+         WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
+       AND NOT EXISTS (SELECT 1 FROM hoa_don hd
+         WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan')
+     ORDER BY hv.ho_ten`,
     [examId, exam.classId],
   )
   response.json({ success: true, data: { exam, students: rows } })
@@ -236,14 +241,20 @@ teacherRouter.put('/exams/:id/results', async (request, response) => {
       throw new HttpError(409, 'Đã hết hạn sửa điểm')
     }
     const [enrollments] = await connection.query<SimpleRow[]>(
-      `SELECT id FROM ghi_danh WHERE lop_hoc_id = ? AND trang_thai <> 'da_huy' FOR UPDATE`,
+      `SELECT gd.id FROM ghi_danh gd
+       WHERE gd.lop_hoc_id = ? AND gd.trang_thai <> 'da_huy'
+         AND EXISTS (SELECT 1 FROM hoa_don hd
+           WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
+         AND NOT EXISTS (SELECT 1 FROM hoa_don hd
+           WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan')
+       FOR UPDATE`,
       [exam.classId],
     )
     const validIds = new Set(enrollments.map((item) => Number(item.id)))
     const receivedIds = new Set<number>()
     for (const item of items as Record<string, unknown>[]) {
       const enrollmentId = positiveInt(item.enrollmentId, 'Ghi danh')
-      if (!validIds.has(enrollmentId)) throw new HttpError(400, 'Học viên không thuộc lớp này')
+      if (!validIds.has(enrollmentId)) throw new HttpError(400, 'Học viên không thuộc lớp hoặc chưa hoàn tất học phí')
       if (receivedIds.has(enrollmentId)) throw new HttpError(400, 'Bảng điểm bị trùng học viên')
       const scores = [item.listening, item.speaking, item.reading, item.writing]
       if (!scores.every(isValidScore)) throw new HttpError(400, 'Điểm phải nằm trong khoảng từ 0 đến 10')

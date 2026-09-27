@@ -39,11 +39,22 @@ export function isCertificateEligible(input: {
   attendance: number
   average: number | null
 }): boolean {
-  return input.enrollmentStatus === 'hoan_thanh'
-    && input.paid
-    && input.attendance >= 80
-    && input.average !== null
-    && input.average >= 5
+  return getCertificateEligibilityReasons(input).length === 0
+}
+
+export function getCertificateEligibilityReasons(input: {
+  enrollmentStatus: string
+  paid: boolean
+  attendance: number
+  average: number | null
+}): string[] {
+  const reasons: string[] = []
+  if (input.enrollmentStatus !== 'hoan_thanh') reasons.push('Chưa hoàn thành khóa học')
+  if (!input.paid) reasons.push('Chưa hoàn tất học phí')
+  if (input.attendance < 80) reasons.push('Tỷ lệ chuyên cần dưới 80%')
+  if (input.average === null) reasons.push('Chưa có đủ điểm thi')
+  else if (input.average < 5) reasons.push('Điểm trung bình dưới 5')
+  return reasons
 }
 
 export function getNotificationTarget(userIdValue: unknown, roleValue: unknown): NotificationTarget | null {

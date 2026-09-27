@@ -46,9 +46,10 @@ Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/heal
 - `GET /api/teacher/dashboard|classes|sessions`: dữ liệu giảng dạy của giáo viên đăng nhập.
 - `GET/PUT /api/teacher/sessions/:id/attendance`: xem và lưu điểm danh cả lớp.
 - `GET/POST /api/teacher/classes/:id/exams`: xem và tạo kỳ thi cho lớp phụ trách.
-- `GET/PUT /api/teacher/exams/:id/results`: xem và lưu điểm bốn kỹ năng.
+- `GET/PUT /api/teacher/exams/:id/results`: xem và lưu điểm bốn kỹ năng; chỉ học viên đã hoàn tất học phí được dự thi.
 - `GET /api/student/dashboard|classes|sessions`: tổng quan và lịch học của học viên đăng nhập.
 - `GET /api/student/results|invoices|certificates`: kết quả, học phí và chứng chỉ cá nhân.
+- `GET /api/student/certificate-eligibility`: xem điều kiện và lý do chưa đủ điều kiện nhận chứng chỉ.
 - `POST /api/student/certificates/:id/download`: ghi nhận và trả thông tin tải chứng chỉ PDF.
 - `POST /api/ai/tu-van-khoa-hoc`: AI tư vấn từ khóa học đang mở trong MySQL.
 

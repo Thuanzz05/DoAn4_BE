@@ -3,6 +3,7 @@ import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { database } from '../config/database'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { HttpError } from '../utils/http-error'
+import { getCertificateEligibilityReasons, isCertificateEligible } from '../utils/operations'
 
 type SimpleRow = RowDataPacket & Record<string, string | number | null>
 
@@ -163,6 +164,38 @@ studentRouter.get('/certificates', async (request, response) => {
     [request.auth!.userId],
   )
   response.json({ success: true, data: rows })
+})
+
+studentRouter.get('/certificate-eligibility', async (request, response) => {
+  const [rows] = await database.query<SimpleRow[]>(
+    `SELECT gd.id AS enrollmentId, gd.trang_thai AS enrollmentStatus,
+      k.ten_khoa_hoc AS courseName, l.ma_lop AS classCode, l.ten_lop AS className,
+      COALESCE((SELECT ROUND(100 * SUM(dd.trang_thai IN ('co_mat', 'di_muon')) /
+        NULLIF(COUNT(*), 0), 0) FROM diem_danh dd WHERE dd.ghi_danh_id = gd.id), 0) AS attendance,
+      (SELECT ROUND(AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4), 2)
+        FROM ket_qua_thi kq WHERE kq.ghi_danh_id = gd.id
+          AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
+          AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS average,
+      (EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
+        AND NOT EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan')) AS paid
+     FROM ghi_danh gd JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
+     LEFT JOIN lop_hoc l ON l.id = gd.lop_hoc_id
+     WHERE gd.hoc_vien_id = ? AND gd.trang_thai <> 'da_huy'
+     ORDER BY gd.id DESC`,
+    [request.auth!.userId],
+  )
+  response.json({
+    success: true,
+    data: rows.map((item) => {
+      const input = {
+        enrollmentStatus: String(item.enrollmentStatus),
+        paid: Boolean(item.paid),
+        attendance: Number(item.attendance),
+        average: item.average === null ? null : Number(item.average),
+      }
+      return { ...item, eligible: isCertificateEligible(input), ineligibleReasons: getCertificateEligibilityReasons(input) }
+    }),
+  })
 })
 
 studentRouter.post('/certificates/:id/download', async (request, response) => {
