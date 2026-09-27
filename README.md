@@ -36,6 +36,9 @@ Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/heal
 - `PATCH /api/certificates/:id/issue`: cấp chứng chỉ sau khi có tệp PDF.
 - `GET /api/certificates/verify/:code`: tra cứu công khai mã xác thực chứng chỉ.
 - `GET /api/reports`: báo cáo doanh thu, công nợ và đào tạo theo kỳ.
+- `GET /api/admin/dashboard`: số liệu tổng quan dành cho quản trị viên.
+- `GET/PATCH /api/notifications`: xem và đánh dấu thông báo đã đọc.
+- `POST /api/notifications`: quản trị viên gửi thông báo cho người dùng hoặc vai trò.
 - `GET /api/teacher/dashboard|classes|sessions`: dữ liệu giảng dạy của giáo viên đăng nhập.
 - `GET/PUT /api/teacher/sessions/:id/attendance`: xem và lưu điểm danh cả lớp.
 - `GET/POST /api/teacher/classes/:id/exams`: xem và tạo kỳ thi cho lớp phụ trách.

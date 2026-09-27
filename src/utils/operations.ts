@@ -1,4 +1,5 @@
 export type ReportPeriod = { start: string; end: string }
+export type NotificationTarget = { userId: number; role: null } | { userId: null; role: 'quan_tri' | 'giao_vien' | 'hoc_vien' }
 
 function dateText(date: Date): string {
   return date.toISOString().slice(0, 10)
@@ -43,4 +44,14 @@ export function isCertificateEligible(input: {
     && input.attendance >= 80
     && input.average !== null
     && input.average >= 5
+}
+
+export function getNotificationTarget(userIdValue: unknown, roleValue: unknown): NotificationTarget | null {
+  const userId = Number(userIdValue)
+  const hasUser = Number.isInteger(userId) && userId > 0
+  const hasRole = typeof roleValue === 'string' && ['quan_tri', 'giao_vien', 'hoc_vien'].includes(roleValue)
+  if (hasUser === hasRole) return null
+  return hasUser
+    ? { userId, role: null }
+    : { userId: null, role: roleValue as 'quan_tri' | 'giao_vien' | 'hoc_vien' }
 }

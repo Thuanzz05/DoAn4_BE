@@ -135,6 +135,11 @@ operationsRouter.post('/invoices', async (request, response) => {
        VALUES (?, ?, ?, CURDATE(), ?)`,
       [code, enrollmentId, Math.trunc(amount), dueDate],
     )
+    await connection.execute(
+      `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
+       SELECT hoc_vien_id, 'Hóa đơn học phí mới', ? FROM ghi_danh WHERE id = ?`,
+      [`Hóa đơn ${code} có hạn thanh toán đến ${dueDate}.`, enrollmentId],
+    )
     await connection.commit()
     const [rows] = await database.query(`${invoiceSelect} WHERE hd.id = ?`, [result.insertId])
     response.status(201).json({ success: true, data: (rows as SimpleRow[])[0] })
@@ -151,12 +156,28 @@ operationsRouter.patch('/invoices/:id/payment', async (request, response) => {
   const invoiceId = positiveInt(request.params.id, 'Hóa đơn')
   const method = request.body.method as PaymentMethod
   if (!['tien_mat', 'chuyen_khoan'].includes(method)) throw new HttpError(400, 'Phương thức thanh toán không hợp lệ')
-  const [result] = await database.execute<ResultSetHeader>(
-    `UPDATE hoa_don SET trang_thai = 'da_thanh_toan', ngay_thanh_toan = NOW(), phuong_thuc = ?
-     WHERE id = ? AND trang_thai = 'chua_thanh_toan'`,
-    [method, invoiceId],
-  )
-  if (!result.affectedRows) throw new HttpError(409, 'Hóa đơn không tồn tại hoặc không thể thanh toán')
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [result] = await connection.execute<ResultSetHeader>(
+      `UPDATE hoa_don SET trang_thai = 'da_thanh_toan', ngay_thanh_toan = NOW(), phuong_thuc = ?
+       WHERE id = ? AND trang_thai = 'chua_thanh_toan'`,
+      [method, invoiceId],
+    )
+    if (!result.affectedRows) throw new HttpError(409, 'Hóa đơn không tồn tại hoặc không thể thanh toán')
+    await connection.execute(
+      `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
+       SELECT gd.hoc_vien_id, 'Đã xác nhận học phí', CONCAT('Hóa đơn ', hd.ma_hoa_don, ' đã được xác nhận thanh toán.')
+       FROM hoa_don hd JOIN ghi_danh gd ON gd.id = hd.ghi_danh_id WHERE hd.id = ?`,
+      [invoiceId],
+    )
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
   const [rows] = await database.query(`${invoiceSelect} WHERE hd.id = ?`, [invoiceId])
   response.json({ success: true, data: (rows as SimpleRow[])[0] })
 })
@@ -217,6 +238,12 @@ operationsRouter.post('/certificates/approve', async (request, response) => {
         [enrollmentId, request.auth!.userId],
       )
       approved += result.affectedRows ? 1 : 0
+      await connection.execute(
+        `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
+         SELECT hoc_vien_id, 'Đã duyệt chứng chỉ', 'Hồ sơ chứng chỉ của bạn đã được phê duyệt.'
+         FROM ghi_danh WHERE id = ?`,
+        [enrollmentId],
+      )
     }
     await connection.commit()
     response.status(201).json({ success: true, data: { approved } })
@@ -233,12 +260,28 @@ operationsRouter.patch('/certificates/:id/issue', async (request, response) => {
   const pdfPath = requiredText(request.body.pdfPath, 'Đường dẫn PDF').slice(0, 500)
   const code = `CC-${new Date().getFullYear()}-${String(certificateId).padStart(6, '0')}`
   const verificationCode = randomBytes(24).toString('hex')
-  const [result] = await database.execute<ResultSetHeader>(
-    `UPDATE chung_chi SET ma_chung_chi = ?, ma_xac_thuc = ?, trang_thai = 'da_cap',
-      ngay_cap = NOW(), duong_dan_pdf = ? WHERE id = ? AND trang_thai = 'da_duyet'`,
-    [code, verificationCode, pdfPath, certificateId],
-  )
-  if (!result.affectedRows) throw new HttpError(409, 'Chứng chỉ không tồn tại hoặc đã được cấp')
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [result] = await connection.execute<ResultSetHeader>(
+      `UPDATE chung_chi SET ma_chung_chi = ?, ma_xac_thuc = ?, trang_thai = 'da_cap',
+        ngay_cap = NOW(), duong_dan_pdf = ? WHERE id = ? AND trang_thai = 'da_duyet'`,
+      [code, verificationCode, pdfPath, certificateId],
+    )
+    if (!result.affectedRows) throw new HttpError(409, 'Chứng chỉ không tồn tại hoặc đã được cấp')
+    await connection.execute(
+      `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
+       SELECT gd.hoc_vien_id, 'Chứng chỉ đã được cấp', CONCAT('Chứng chỉ ', cc.ma_chung_chi, ' đã sẵn sàng để tải xuống.')
+       FROM chung_chi cc JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id WHERE cc.id = ?`,
+      [certificateId],
+    )
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
   response.json({ success: true, data: { id: certificateId, code, verificationCode, pdfPath } })
 })
 
