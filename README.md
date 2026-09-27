@@ -32,6 +32,9 @@ Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/heal
 - `GET/POST/PATCH/DELETE /api/rooms`: quản lý phòng học.
 - `GET/POST/PATCH /api/classes`: quản lý lớp và phân công giáo viên.
 - `GET/POST/PATCH /api/enrollments`: ghi danh, xếp lớp và tự tạo hóa đơn.
+- `GET /api/enrollments/import/template`: tải file Excel mẫu để import học viên.
+- `POST /api/enrollments/import/preview?courseId=&classId=`: đọc file `.xlsx` và xem lỗi từng dòng.
+- `POST /api/enrollments/import/confirm`: tạo hàng loạt tài khoản, ghi danh và hóa đơn; mật khẩu tạm chỉ trả về một lần.
 - `GET/POST/PATCH/DELETE /api/schedules`: xếp lịch, kiểm tra trùng phòng/giáo viên.
 - `POST /api/classes/:id/generate-sessions`: sinh các buổi học từ lịch hàng tuần.
 - `GET/POST/PATCH /api/invoices`: quản lý hóa đơn, thanh toán và hủy hóa đơn.

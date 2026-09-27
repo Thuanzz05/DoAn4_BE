@@ -4,6 +4,7 @@ import { aiRouter } from './ai'
 import { academicRouter } from './academic'
 import { authRouter } from './auth'
 import { coursesRouter } from './courses'
+import { enrollmentImportRouter } from './enrollment-import'
 import { operationsRouter } from './operations'
 import { overviewRouter } from './overview'
 import { studentRouter } from './student'
@@ -24,6 +25,7 @@ apiRouter.get('/health', async (_request, response) => {
 apiRouter.use('/auth', authRouter)
 apiRouter.use('/courses', coursesRouter)
 apiRouter.use('/users', usersRouter)
+apiRouter.use('/enrollments/import', enrollmentImportRouter)
 apiRouter.use(academicRouter)
 apiRouter.use(operationsRouter)
 apiRouter.use(overviewRouter)
