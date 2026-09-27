@@ -1,5 +1,11 @@
+import { randomBytes } from 'node:crypto'
+
 export function isValidPassword(value: unknown): value is string {
   return typeof value === 'string' && value.length >= 8
+}
+
+export function generateTemporaryPassword(): string {
+  return `Tk1!${randomBytes(8).toString('base64url')}`
 }
 
 export function isValidBirthDate(value: unknown): value is string {

@@ -3,7 +3,10 @@ import bcrypt from 'bcryptjs'
 import { Router } from 'express'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2'
 import { database } from '../config/database'
+import { env } from '../config/env'
 import { requireAuth, requireRole } from '../middlewares/auth'
+import { sendTemporaryPassword } from '../services/mailer'
+import { generateTemporaryPassword } from '../utils/account'
 import { HttpError } from '../utils/http-error'
 
 type VaiTro = 'quan_tri' | 'giao_vien' | 'hoc_vien'
@@ -40,6 +43,12 @@ function text(value: unknown, label: string): string {
 
 function newCode(role: 'giao_vien' | 'hoc_vien'): string {
   return `${role === 'giao_vien' ? 'GV' : 'HV'}-${randomInt(10_000_000, 100_000_000)}`
+}
+
+function positiveInt(value: unknown, label: string): number {
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 1) throw new HttpError(400, `${label} phải là số nguyên dương`)
+  return parsed
 }
 
 usersRouter.get('/', async (request, response) => {
@@ -132,4 +141,70 @@ usersRouter.patch('/:id/status', async (request, response) => {
     [active, active, userId],
   )
   response.json({ success: true, message: active ? 'Đã mở khóa tài khoản' : 'Đã khóa tài khoản' })
+})
+
+usersRouter.post('/:id/reset-password', async (request, response) => {
+  const userId = positiveInt(request.params.id, 'Người dùng')
+  if (userId === request.auth!.userId) throw new HttpError(400, 'Hãy dùng chức năng đổi mật khẩu cho tài khoản của bạn')
+  const [rows] = await database.query<UserRow[]>(`${selectUsers} WHERE n.id = ? GROUP BY n.id`, [userId])
+  const user = rows[0]
+  if (!user) throw new HttpError(404, 'Không tìm thấy người dùng')
+  if (user.role === 'quan_tri') throw new HttpError(403, 'Không được đặt lại mật khẩu của quản trị viên khác')
+  const temporaryPassword = generateTemporaryPassword()
+  const passwordHash = await bcrypt.hash(temporaryPassword, 12)
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    await connection.execute(
+      `UPDATE nguoi_dung SET mat_khau_bam = ?, phien_ban_dang_nhap = phien_ban_dang_nhap + 1
+       WHERE id = ?`,
+      [passwordHash, userId],
+    )
+    await connection.execute(
+      'UPDATE ma_dat_lai_mat_khau SET da_dung_luc = NOW() WHERE nguoi_dung_id = ? AND da_dung_luc IS NULL',
+      [userId],
+    )
+    const emailSent = await sendTemporaryPassword(user.email, user.fullName, temporaryPassword)
+    if (!emailSent && env.nodeEnv === 'production') throw new HttpError(503, 'Dịch vụ gửi email chưa được cấu hình')
+    await connection.commit()
+    response.json({
+      success: true,
+      message: 'Đã đặt lại mật khẩu và vô hiệu hóa các phiên đăng nhập cũ',
+      data: {
+        emailSent,
+        ...(!emailSent && env.nodeEnv !== 'production' ? { devTemporaryPassword: temporaryPassword } : {}),
+      },
+    })
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+})
+
+usersRouter.delete('/:id', async (request, response) => {
+  const userId = positiveInt(request.params.id, 'Người dùng')
+  if (userId === request.auth!.userId) throw new HttpError(400, 'Không thể tự xóa tài khoản đang đăng nhập')
+  const [rows] = await database.query<UserRow[]>(`${selectUsers} WHERE n.id = ? GROUP BY n.id`, [userId])
+  const user = rows[0]
+  if (!user) throw new HttpError(404, 'Không tìm thấy người dùng')
+  if (user.role === 'quan_tri') throw new HttpError(403, 'Không được xóa tài khoản quản trị viên')
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    await connection.execute('DELETE FROM ma_dat_lai_mat_khau WHERE nguoi_dung_id = ?', [userId])
+    await connection.execute('DELETE FROM thong_bao WHERE nguoi_dung_id = ?', [userId])
+    await connection.execute('DELETE FROM nguoi_dung WHERE id = ?', [userId])
+    await connection.commit()
+    response.status(204).send()
+  } catch (error) {
+    await connection.rollback()
+    if ((error as { code?: string }).code === 'ER_ROW_IS_REFERENCED_2') {
+      throw new HttpError(409, 'Không thể xóa tài khoản đang có dữ liệu học tập hoặc giảng dạy')
+    }
+    throw error
+  } finally {
+    connection.release()
+  }
 })

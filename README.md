@@ -29,6 +29,8 @@ Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/heal
 - `GET /api/courses/all`: toàn bộ khóa học, chỉ quản trị viên.
 - `POST/PATCH/DELETE /api/courses`: quản lý khóa học, chỉ quản trị viên.
 - `GET/POST/PATCH /api/users`: quản lý giáo viên, học viên và trạng thái tài khoản.
+- `POST /api/users/:id/reset-password`: quản trị viên cấp mật khẩu tạm và vô hiệu hóa phiên đăng nhập cũ.
+- `DELETE /api/users/:id`: xóa tài khoản giáo viên/học viên chưa phát sinh dữ liệu nghiệp vụ.
 - `GET/POST/PATCH/DELETE /api/rooms`: quản lý phòng học.
 - `GET/POST/PATCH /api/classes`: quản lý lớp và phân công giáo viên.
 - `GET/POST/PATCH /api/enrollments`: ghi danh, xếp lớp và tự tạo hóa đơn.

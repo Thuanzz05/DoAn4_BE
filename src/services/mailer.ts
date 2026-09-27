@@ -28,3 +28,19 @@ export async function sendPasswordResetCode(
   })
   return true
 }
+
+export async function sendTemporaryPassword(
+  email: string,
+  fullName: string,
+  password: string,
+): Promise<boolean> {
+  if (!transporter) return false
+
+  await transporter.sendMail({
+    from: env.smtpFrom,
+    to: email,
+    subject: 'Mật khẩu tạm thời của tài khoản',
+    text: `Xin chào ${fullName}, quản trị viên đã đặt lại mật khẩu tài khoản của bạn. Mật khẩu tạm thời: ${password}. Hãy đăng nhập và đổi mật khẩu ngay.`,
+  })
+  return true
+}
