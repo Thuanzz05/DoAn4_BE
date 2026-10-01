@@ -42,7 +42,7 @@ Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/heal
 - `GET/POST/PATCH /api/invoices`: quản lý hóa đơn, thanh toán và hủy hóa đơn.
 - `GET /api/certificates/candidates`: danh sách và điều kiện xét cấp chứng chỉ.
 - `POST /api/certificates/approve`: phê duyệt học viên đủ điều kiện.
-- `PATCH /api/certificates/:id/issue`: cấp chứng chỉ sau khi có tệp PDF.
+- `PATCH /api/certificates/:id/issue`: tự tạo PDF và phát hành chứng chỉ đã duyệt.
 - `GET /api/certificates/verify/:code`: tra cứu công khai mã xác thực chứng chỉ.
 - `GET /api/reports`: báo cáo doanh thu, công nợ và đào tạo theo kỳ.
 - `GET /api/admin/dashboard`: số liệu tổng quan dành cho quản trị viên.
@@ -59,6 +59,8 @@ Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/heal
 - `POST /api/ai/tu-van-khoa-hoc`: AI tư vấn từ khóa học đang mở trong MySQL.
 
 API cần đăng nhập sử dụng header `Authorization: Bearer <JWT>`.
+
+PDF chứng chỉ được lưu trong `STORAGE_DIR/certificates` và phục vụ qua `PUBLIC_URL`. Khi triển khai trên Linux, cấu hình `CERTIFICATE_FONT_PATH` tới một font `.ttf` hỗ trợ tiếng Việt.
 
 ## Gmail và Google login
 

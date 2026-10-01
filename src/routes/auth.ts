@@ -281,7 +281,11 @@ authRouter.patch('/me', requireAuth, async (request, response) => {
   const [rows] = await database.query<UserRow[]>('SELECT * FROM nguoi_dung WHERE id = ?', [request.auth!.userId])
   const user = rows[0]
   const fullName = request.body.fullName === undefined ? user.ho_ten : requiredString(request.body.fullName, 'Họ tên')
-  const phone = request.body.phone === undefined ? user.so_dien_thoai : requiredString(request.body.phone, 'Số điện thoại').replace(/\s/g, '')
+  const phone = request.body.phone === undefined
+    ? user.so_dien_thoai
+    : request.body.phone === null || request.body.phone === ''
+      ? null
+      : requiredString(request.body.phone, 'Số điện thoại').replace(/\s/g, '')
   const birthDate = request.body.birthDate === undefined ? user.ngay_sinh : request.body.birthDate || null
   if (phone && !phonePattern.test(phone)) throw new HttpError(400, 'Số điện thoại phải gồm 10 chữ số')
   if (birthDate !== null && !isValidBirthDate(birthDate)) throw new HttpError(400, 'Ngày sinh không hợp lệ')

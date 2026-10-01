@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { resolve } from 'node:path'
 
 function readPort(value: string | undefined, fallback: number, name: string): number {
   const port = Number(value ?? fallback)
@@ -16,9 +17,14 @@ function secret(name: string, fallback: string): string {
   return value
 }
 
+const port = readPort(process.env.PORT, 3000, 'PORT')
+
 export const env = {
-  port: readPort(process.env.PORT, 3000, 'PORT'),
+  port,
   clientUrl: process.env.CLIENT_URL ?? 'http://localhost:5173',
+  publicUrl: (process.env.PUBLIC_URL ?? `http://localhost:${port}`).replace(/\/$/, ''),
+  storageDir: resolve(process.env.STORAGE_DIR ?? 'storage'),
+  certificateFontPath: process.env.CERTIFICATE_FONT_PATH ?? '',
   nodeEnv: process.env.NODE_ENV ?? 'development',
   dbHost: process.env.DB_HOST ?? '127.0.0.1',
   dbPort: readPort(process.env.DB_PORT, 3306, 'DB_PORT'),

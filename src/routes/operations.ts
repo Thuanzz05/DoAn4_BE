@@ -1,9 +1,13 @@
 import { randomBytes, randomInt } from 'node:crypto'
+import { rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { Router } from 'express'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { database } from '../config/database'
+import { env } from '../config/env'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { HttpError } from '../utils/http-error'
+import { createCertificatePdf } from '../services/certificate-pdf'
 import { getCertificateEligibilityReasons, getReportPeriod, isCertificateEligible } from '../utils/operations'
 
 type SimpleRow = RowDataPacket & Record<string, string | number | null>
@@ -15,6 +19,15 @@ type CandidateRow = SimpleRow & {
   average: number | null
   paid: number
   certificateId: number | null
+}
+type CertificateIssueRow = RowDataPacket & {
+  status: string
+  studentCode: string
+  studentName: string
+  courseName: string
+  language: string
+  classCode: string
+  className: string
 }
 
 export const operationsRouter = Router()
@@ -257,12 +270,39 @@ operationsRouter.post('/certificates/approve', async (request, response) => {
 
 operationsRouter.patch('/certificates/:id/issue', async (request, response) => {
   const certificateId = positiveInt(request.params.id, 'Chứng chỉ')
-  const pdfPath = requiredText(request.body.pdfPath, 'Đường dẫn PDF').slice(0, 500)
   const code = `CC-${new Date().getFullYear()}-${String(certificateId).padStart(6, '0')}`
   const verificationCode = randomBytes(24).toString('hex')
+  const filename = `${verificationCode}.pdf`
+  const outputPath = join(env.storageDir, 'certificates', filename)
+  const pdfPath = `${env.publicUrl}/uploads/certificates/${filename}`
+  const verificationUrl = `${env.publicUrl}/api/certificates/verify/${verificationCode}`
   const connection = await database.getConnection()
   try {
     await connection.beginTransaction()
+    const [certificates] = await connection.query<CertificateIssueRow[]>(
+      `SELECT cc.trang_thai AS status, hv.ma_nguoi_dung AS studentCode, hv.ho_ten AS studentName,
+        k.ten_khoa_hoc AS courseName, k.ngoai_ngu AS language,
+        l.ma_lop AS classCode, l.ten_lop AS className
+       FROM chung_chi cc JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id
+       JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
+       JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
+       JOIN lop_hoc l ON l.id = gd.lop_hoc_id
+       WHERE cc.id = ? AND cc.trang_thai = 'da_duyet' FOR UPDATE`,
+      [certificateId],
+    )
+    const certificate = certificates[0]
+    if (!certificate) throw new HttpError(409, 'Chứng chỉ không tồn tại hoặc đã được cấp')
+    await createCertificatePdf(outputPath, {
+      certificateCode: code,
+      studentName: certificate.studentName,
+      studentCode: certificate.studentCode,
+      courseName: certificate.courseName,
+      className: certificate.className,
+      classCode: certificate.classCode,
+      language: certificate.language,
+      issuedAt: new Date(),
+      verificationUrl,
+    })
     const [result] = await connection.execute<ResultSetHeader>(
       `UPDATE chung_chi SET ma_chung_chi = ?, ma_xac_thuc = ?, trang_thai = 'da_cap',
         ngay_cap = NOW(), duong_dan_pdf = ? WHERE id = ? AND trang_thai = 'da_duyet'`,
@@ -278,6 +318,7 @@ operationsRouter.patch('/certificates/:id/issue', async (request, response) => {
     await connection.commit()
   } catch (error) {
     await connection.rollback()
+    await rm(outputPath, { force: true }).catch(() => undefined)
     throw error
   } finally {
     connection.release()

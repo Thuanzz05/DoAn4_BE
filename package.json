@@ -22,7 +22,8 @@
     "google-auth-library": "^11.1.0",
     "jsonwebtoken": "^9.0.3",
     "mysql2": "^3.24.4",
-    "nodemailer": "^10.0.10"
+    "nodemailer": "^10.0.10",
+    "pdfkit": "^0.20.2"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
@@ -30,6 +31,7 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.17.2",
     "@types/nodemailer": "^8.0.2",
+    "@types/pdfkit": "^0.17.6",
     "tsx": "^4.20.4",
     "typescript": "~5.8.3"
   },
