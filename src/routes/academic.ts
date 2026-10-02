@@ -21,6 +21,8 @@ type ClassRow = RowDataPacket & {
   capacity: number
   status: ClassStatus
   enrolled: number
+  generatedSessions: number
+  completedSessions: number
 }
 type ScheduleRow = RowDataPacket & {
   id: number
@@ -47,6 +49,7 @@ type EnrollmentRow = RowDataPacket & {
   status: EnrollmentStatus
 }
 type SimpleRow = RowDataPacket & Record<string, string | number | null>
+type QueryConnection = PoolConnection | typeof database
 
 export const academicRouter = Router()
 academicRouter.use(['/rooms', '/classes', '/enrollments', '/schedules'], requireAuth, requireRole('quan_tri'))
@@ -56,10 +59,13 @@ const classSelect = `SELECT l.id, l.ma_lop AS code, l.ten_lop AS name,
   l.giao_vien_id AS teacherId, gv.ho_ten AS teacherName,
   l.ngay_khai_giang AS startDate, l.so_buoi AS sessions,
   l.si_so_toi_da AS capacity, l.trang_thai AS status,
-  COUNT(CASE WHEN gd.trang_thai <> 'da_huy' THEN gd.id END) AS enrolled
+  COUNT(DISTINCT CASE WHEN gd.trang_thai <> 'da_huy' THEN gd.id END) AS enrolled,
+  COUNT(DISTINCT bh.id) AS generatedSessions,
+  COUNT(DISTINCT CASE WHEN bh.trang_thai = 'da_hoc' THEN bh.id END) AS completedSessions
   FROM lop_hoc l JOIN khoa_hoc k ON k.id = l.khoa_hoc_id
   LEFT JOIN nguoi_dung gv ON gv.id = l.giao_vien_id
-  LEFT JOIN ghi_danh gd ON gd.lop_hoc_id = l.id`
+  LEFT JOIN ghi_danh gd ON gd.lop_hoc_id = l.id
+  LEFT JOIN buoi_hoc bh ON bh.lop_hoc_id = l.id`
 
 const enrollmentSelect = `SELECT gd.id, gd.hoc_vien_id AS studentId,
   hv.ma_nguoi_dung AS studentCode, hv.ho_ten AS studentName,
@@ -139,6 +145,18 @@ async function ensureNoScheduleConflict(
   if (conflicts[0]) {
     throw new HttpError(409, `Trùng lịch với lớp ${conflicts[0].className}`)
   }
+}
+
+async function notifyScheduleChange(connection: QueryConnection, classId: number, content: string): Promise<void> {
+  await connection.execute(
+    `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
+     SELECT recipient.id, 'Lịch học thay đổi', ?
+     FROM (
+       SELECT giao_vien_id AS id FROM lop_hoc WHERE id = ?
+       UNION SELECT hoc_vien_id FROM ghi_danh WHERE lop_hoc_id = ? AND trang_thai <> 'da_huy'
+     ) recipient WHERE recipient.id IS NOT NULL`,
+    [content, classId, classId],
+  )
 }
 
 academicRouter.get('/rooms', async (_request, response) => {
@@ -246,6 +264,91 @@ academicRouter.post('/classes/:id/cancel', async (request, response) => {
   response.json({ success: true, message: 'Đã hủy lớp học' })
 })
 
+academicRouter.post('/classes/:id/start', async (request, response) => {
+  const classId = positiveInt(request.params.id, 'Lớp học')
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [rows] = await connection.query<SimpleRow[]>(
+      `SELECT id, ten_lop AS name, trang_thai AS status, giao_vien_id AS teacherId,
+        so_buoi AS sessions FROM lop_hoc WHERE id = ? FOR UPDATE`,
+      [classId],
+    )
+    const classItem = rows[0]
+    if (!classItem) throw new HttpError(404, 'Không tìm thấy lớp học')
+    if (classItem.status !== 'sap_khai_giang') throw new HttpError(409, 'Chỉ lớp sắp khai giảng mới được bắt đầu')
+    if (!classItem.teacherId) throw new HttpError(409, 'Lớp chưa được phân công giáo viên')
+    const [sessionCounts] = await connection.query<SimpleRow[]>(
+      'SELECT COUNT(*) AS generatedSessions FROM buoi_hoc WHERE lop_hoc_id = ?',
+      [classId],
+    )
+    if (Number(sessionCounts[0].generatedSessions) !== Number(classItem.sessions)) {
+      throw new HttpError(409, `Cần tạo đủ ${classItem.sessions} buổi học trước khi bắt đầu lớp`)
+    }
+    await connection.execute("UPDATE lop_hoc SET trang_thai = 'dang_hoc' WHERE id = ?", [classId])
+    await connection.execute(
+      `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
+       SELECT recipient.id, 'Lớp học đã bắt đầu', ?
+       FROM (
+         SELECT giao_vien_id AS id FROM lop_hoc WHERE id = ?
+         UNION SELECT hoc_vien_id FROM ghi_danh WHERE lop_hoc_id = ? AND trang_thai <> 'da_huy'
+       ) recipient WHERE recipient.id IS NOT NULL`,
+      [`Lớp ${classItem.name} đã chuyển sang trạng thái đang học.`, classId, classId],
+    )
+    await connection.commit()
+    response.json({ success: true, message: 'Đã bắt đầu lớp học' })
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+})
+
+academicRouter.post('/classes/:id/complete', async (request, response) => {
+  const classId = positiveInt(request.params.id, 'Lớp học')
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [rows] = await connection.query<SimpleRow[]>(
+      `SELECT id, ten_lop AS name, trang_thai AS status, so_buoi AS sessions
+       FROM lop_hoc WHERE id = ? FOR UPDATE`,
+      [classId],
+    )
+    const classItem = rows[0]
+    if (!classItem) throw new HttpError(404, 'Không tìm thấy lớp học')
+    if (classItem.status !== 'dang_hoc') throw new HttpError(409, 'Chỉ lớp đang học mới được kết thúc')
+    const [sessionCounts] = await connection.query<SimpleRow[]>(
+      `SELECT COUNT(*) AS generatedSessions,
+        SUM(trang_thai = 'da_hoc') AS completedSessions
+       FROM buoi_hoc WHERE lop_hoc_id = ?`,
+      [classId],
+    )
+    if (Number(sessionCounts[0].generatedSessions) !== Number(classItem.sessions)
+      || Number(sessionCounts[0].completedSessions) !== Number(classItem.sessions)) {
+      throw new HttpError(409, `Cần hoàn tất điểm danh đủ ${classItem.sessions} buổi học trước khi kết thúc lớp`)
+    }
+    await connection.execute("UPDATE lop_hoc SET trang_thai = 'da_ket_thuc' WHERE id = ?", [classId])
+    const [enrollments] = await connection.execute<ResultSetHeader>(
+      "UPDATE ghi_danh SET trang_thai = 'hoan_thanh' WHERE lop_hoc_id = ? AND trang_thai = 'dang_hoc'",
+      [classId],
+    )
+    await connection.execute(
+      `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
+       SELECT hoc_vien_id, 'Lớp học đã kết thúc', ? FROM ghi_danh
+       WHERE lop_hoc_id = ? AND trang_thai = 'hoan_thanh'`,
+      [`Lớp ${classItem.name} đã hoàn thành. Bạn có thể kiểm tra kết quả và điều kiện chứng chỉ.`, classId],
+    )
+    await connection.commit()
+    response.json({ success: true, data: { completedEnrollments: enrollments.affectedRows } })
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+})
+
 academicRouter.get('/enrollments', async (_request, response) => {
   const [rows] = await database.query<EnrollmentRow[]>(`${enrollmentSelect} ORDER BY gd.id DESC`)
   response.json({ success: true, data: rows })
@@ -347,6 +450,8 @@ academicRouter.post('/schedules', async (request, response) => {
   const startTime = time(request.body.startTime, 'Giờ bắt đầu')
   const endTime = time(request.body.endTime, 'Giờ kết thúc')
   if (endTime <= startTime) throw new HttpError(400, 'Giờ kết thúc phải sau giờ bắt đầu')
+  const [sessions] = await database.query<SimpleRow[]>('SELECT COUNT(*) AS total FROM buoi_hoc WHERE lop_hoc_id = ?', [classId])
+  if (Number(sessions[0].total) > 0) throw new HttpError(409, 'Lớp đã sinh buổi học; hãy chỉnh sửa lịch hiện có')
   await ensureNoScheduleConflict(classId, roomId, dayOfWeek, startTime, endTime)
   const [result] = await database.execute<ResultSetHeader>(
     `INSERT INTO lich_hang_tuan
@@ -354,6 +459,7 @@ academicRouter.post('/schedules', async (request, response) => {
      VALUES (?, ?, ?, ?, ?)`,
     [classId, roomId, dayOfWeek, startTime, endTime],
   )
+  await notifyScheduleChange(database, classId, `Lịch học đã được xếp vào Thứ ${dayOfWeek}, ${startTime.slice(0, 5)}-${endTime.slice(0, 5)}.`)
   const [rows] = await database.query<ScheduleRow[]>(`${scheduleSelect} WHERE lh.id = ?`, [result.insertId])
   response.status(201).json({ success: true, data: rows[0] })
 })
@@ -368,19 +474,55 @@ academicRouter.patch('/schedules/:id', async (request, response) => {
   const startTime = request.body.startTime === undefined ? current.startTime : time(request.body.startTime, 'Giờ bắt đầu')
   const endTime = request.body.endTime === undefined ? current.endTime : time(request.body.endTime, 'Giờ kết thúc')
   if (dayOfWeek > 7 || endTime <= startTime) throw new HttpError(400, 'Ngày hoặc khung giờ không hợp lệ')
+  const [sessions] = await database.query<SimpleRow[]>('SELECT COUNT(*) AS total FROM buoi_hoc WHERE lop_hoc_id = ?', [current.classId])
+  const hasSessions = Number(sessions[0].total) > 0
+  if (hasSessions && (classId !== current.classId || dayOfWeek !== current.dayOfWeek)) {
+    throw new HttpError(409, 'Lớp đã sinh buổi học; chỉ được đổi phòng hoặc khung giờ trong cùng ngày')
+  }
   await ensureNoScheduleConflict(classId, roomId, dayOfWeek, startTime, endTime, current.id)
-  await database.execute(
-    `UPDATE lich_hang_tuan SET lop_hoc_id = ?, phong_hoc_id = ?, thu_trong_tuan = ?,
-     gio_bat_dau = ?, gio_ket_thuc = ? WHERE id = ?`,
-    [classId, roomId, dayOfWeek, startTime, endTime, current.id],
-  )
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    await connection.execute(
+      `UPDATE lich_hang_tuan SET lop_hoc_id = ?, phong_hoc_id = ?, thu_trong_tuan = ?,
+       gio_bat_dau = ?, gio_ket_thuc = ? WHERE id = ?`,
+      [classId, roomId, dayOfWeek, startTime, endTime, current.id],
+    )
+    if (hasSessions) {
+      await connection.execute(
+        `UPDATE buoi_hoc SET phong_hoc_id = ?,
+          bat_dau = TIMESTAMP(DATE(bat_dau), ?), ket_thuc = TIMESTAMP(DATE(ket_thuc), ?)
+         WHERE lop_hoc_id = ? AND phong_hoc_id = ? AND DAYOFWEEK(bat_dau) = ?
+           AND TIME(bat_dau) = ? AND TIME(ket_thuc) = ?
+           AND trang_thai = 'da_len_lich' AND bat_dau >= NOW()`,
+        [roomId, startTime, endTime, current.classId, current.roomId, current.dayOfWeek, current.startTime, current.endTime],
+      )
+    }
+    await notifyScheduleChange(
+      connection,
+      classId,
+      `Lịch học đã đổi sang Thứ ${dayOfWeek}, ${startTime.slice(0, 5)}-${endTime.slice(0, 5)}; phòng học đã được cập nhật.`,
+    )
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
   const [updated] = await database.query<ScheduleRow[]>(`${scheduleSelect} WHERE lh.id = ?`, [current.id])
   response.json({ success: true, data: updated[0] })
 })
 
 academicRouter.delete('/schedules/:id', async (request, response) => {
+  const [rows] = await database.query<ScheduleRow[]>(`${scheduleSelect} WHERE lh.id = ?`, [request.params.id])
+  const current = rows[0]
+  if (!current) throw new HttpError(404, 'Không tìm thấy lịch học')
+  const [sessions] = await database.query<SimpleRow[]>('SELECT COUNT(*) AS total FROM buoi_hoc WHERE lop_hoc_id = ?', [current.classId])
+  if (Number(sessions[0].total) > 0) throw new HttpError(409, 'Không thể xóa lịch sau khi đã sinh buổi học; hãy chỉnh sửa phòng hoặc giờ học')
   const [result] = await database.execute<ResultSetHeader>('DELETE FROM lich_hang_tuan WHERE id = ?', [request.params.id])
   if (!result.affectedRows) throw new HttpError(404, 'Không tìm thấy lịch học')
+  await notifyScheduleChange(database, current.classId, `Đã xóa lịch Thứ ${current.dayOfWeek}, ${current.startTime.slice(0, 5)}-${current.endTime.slice(0, 5)}.`)
   response.status(204).send()
 })
 

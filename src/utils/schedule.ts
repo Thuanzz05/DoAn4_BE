@@ -32,7 +32,8 @@ export function generateSessionDates(
   for (let offset = 0; sessions.length < totalSessions && offset < 730; offset += 1) {
     const current = new Date(cursor)
     current.setDate(cursor.getDate() + offset)
-    const dayOfWeek = current.getDay() === 0 ? 7 : current.getDay()
+    // MySQL DAYOFWEEK và giao diện cùng dùng 1=Chủ nhật, 2=Thứ hai, ..., 7=Thứ bảy.
+    const dayOfWeek = current.getDay() === 0 ? 1 : current.getDay() + 1
     for (const slot of orderedSlots.filter((item) => item.dayOfWeek === dayOfWeek)) {
       const date = dateText(current)
       sessions.push({

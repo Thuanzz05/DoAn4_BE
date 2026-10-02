@@ -155,12 +155,29 @@ studentRouter.get('/certificates', async (request, response) => {
       cc.trang_thai AS status, cc.ngay_duyet AS approvedAt, cc.ngay_cap AS issuedAt,
       cc.duong_dan_pdf AS pdfPath, k.ten_khoa_hoc AS courseName,
       l.ma_lop AS classCode, l.ten_lop AS className,
+      (SELECT ROUND(AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4), 2)
+       FROM ket_qua_thi kq WHERE kq.ghi_danh_id = gd.id
+         AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
+         AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS average,
       COUNT(lt.id) AS downloads
      FROM chung_chi cc JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id
      JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
      LEFT JOIN lop_hoc l ON l.id = gd.lop_hoc_id
      LEFT JOIN luot_tai_chung_chi lt ON lt.chung_chi_id = cc.id
      WHERE gd.hoc_vien_id = ? GROUP BY cc.id ORDER BY cc.id DESC`,
+    [request.auth!.userId],
+  )
+  response.json({ success: true, data: rows })
+})
+
+studentRouter.get('/certificate-downloads', async (request, response) => {
+  const [rows] = await database.query(
+    `SELECT lt.id, cc.ma_chung_chi AS certificateCode,
+      k.ten_khoa_hoc AS courseName, lt.thoi_gian_tai AS downloadedAt
+     FROM luot_tai_chung_chi lt JOIN chung_chi cc ON cc.id = lt.chung_chi_id
+     JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id
+     JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
+     WHERE gd.hoc_vien_id = ? ORDER BY lt.thoi_gian_tai DESC`,
     [request.auth!.userId],
   )
   response.json({ success: true, data: rows })

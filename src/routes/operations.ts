@@ -1,6 +1,6 @@
 import { randomBytes, randomInt } from 'node:crypto'
 import { rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { Router } from 'express'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { database } from '../config/database'
@@ -22,6 +22,8 @@ type CandidateRow = SimpleRow & {
 }
 type CertificateIssueRow = RowDataPacket & {
   status: string
+  certificateCode: string | null
+  pdfPath: string | null
   studentCode: string
   studentName: string
   courseName: string
@@ -268,30 +270,33 @@ operationsRouter.post('/certificates/approve', async (request, response) => {
   }
 })
 
-operationsRouter.patch('/certificates/:id/issue', async (request, response) => {
-  const certificateId = positiveInt(request.params.id, 'Chứng chỉ')
-  const code = `CC-${new Date().getFullYear()}-${String(certificateId).padStart(6, '0')}`
+async function generateCertificate(certificateId: number, expectedStatus: 'da_duyet' | 'da_cap') {
   const verificationCode = randomBytes(24).toString('hex')
   const filename = `${verificationCode}.pdf`
   const outputPath = join(env.storageDir, 'certificates', filename)
   const pdfPath = `${env.publicUrl}/uploads/certificates/${filename}`
-  const verificationUrl = `${env.publicUrl}/api/certificates/verify/${verificationCode}`
+  const verificationUrl = `${env.clientUrl}/verify-certificate?code=${verificationCode}`
   const connection = await database.getConnection()
+  let oldPdfPath: string | null = null
+  let code = ''
   try {
     await connection.beginTransaction()
     const [certificates] = await connection.query<CertificateIssueRow[]>(
-      `SELECT cc.trang_thai AS status, hv.ma_nguoi_dung AS studentCode, hv.ho_ten AS studentName,
+      `SELECT cc.trang_thai AS status, cc.ma_chung_chi AS certificateCode,
+        cc.duong_dan_pdf AS pdfPath, hv.ma_nguoi_dung AS studentCode, hv.ho_ten AS studentName,
         k.ten_khoa_hoc AS courseName, k.ngoai_ngu AS language,
         l.ma_lop AS classCode, l.ten_lop AS className
        FROM chung_chi cc JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id
        JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
        JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
        JOIN lop_hoc l ON l.id = gd.lop_hoc_id
-       WHERE cc.id = ? AND cc.trang_thai = 'da_duyet' FOR UPDATE`,
-      [certificateId],
+       WHERE cc.id = ? AND cc.trang_thai = ? FOR UPDATE`,
+      [certificateId, expectedStatus],
     )
     const certificate = certificates[0]
-    if (!certificate) throw new HttpError(409, 'Chứng chỉ không tồn tại hoặc đã được cấp')
+    if (!certificate) throw new HttpError(409, expectedStatus === 'da_duyet' ? 'Chứng chỉ không tồn tại hoặc đã được cấp' : 'Chỉ được cấp lại chứng chỉ đã phát hành')
+    code = certificate.certificateCode ?? `CC-${new Date().getFullYear()}-${String(certificateId).padStart(6, '0')}`
+    oldPdfPath = certificate.pdfPath
     await createCertificatePdf(outputPath, {
       certificateCode: code,
       studentName: certificate.studentName,
@@ -305,15 +310,15 @@ operationsRouter.patch('/certificates/:id/issue', async (request, response) => {
     })
     const [result] = await connection.execute<ResultSetHeader>(
       `UPDATE chung_chi SET ma_chung_chi = ?, ma_xac_thuc = ?, trang_thai = 'da_cap',
-        ngay_cap = NOW(), duong_dan_pdf = ? WHERE id = ? AND trang_thai = 'da_duyet'`,
-      [code, verificationCode, pdfPath, certificateId],
+        ngay_cap = NOW(), duong_dan_pdf = ? WHERE id = ? AND trang_thai = ?`,
+      [code, verificationCode, pdfPath, certificateId, expectedStatus],
     )
-    if (!result.affectedRows) throw new HttpError(409, 'Chứng chỉ không tồn tại hoặc đã được cấp')
+    if (!result.affectedRows) throw new HttpError(409, 'Trạng thái chứng chỉ đã thay đổi, vui lòng thử lại')
     await connection.execute(
       `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
-       SELECT gd.hoc_vien_id, 'Chứng chỉ đã được cấp', CONCAT('Chứng chỉ ', cc.ma_chung_chi, ' đã sẵn sàng để tải xuống.')
+       SELECT gd.hoc_vien_id, ?, CONCAT('Chứng chỉ ', cc.ma_chung_chi, ' đã sẵn sàng để tải xuống.')
        FROM chung_chi cc JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id WHERE cc.id = ?`,
-      [certificateId],
+      [expectedStatus === 'da_cap' ? 'Chứng chỉ đã được cấp lại' : 'Chứng chỉ đã được cấp', certificateId],
     )
     await connection.commit()
   } catch (error) {
@@ -323,7 +328,20 @@ operationsRouter.patch('/certificates/:id/issue', async (request, response) => {
   } finally {
     connection.release()
   }
-  response.json({ success: true, data: { id: certificateId, code, verificationCode, pdfPath } })
+  if (oldPdfPath && oldPdfPath !== pdfPath) {
+    await rm(join(env.storageDir, 'certificates', basename(oldPdfPath)), { force: true }).catch(() => undefined)
+  }
+  return { id: certificateId, code, verificationCode, pdfPath }
+}
+
+operationsRouter.patch('/certificates/:id/issue', async (request, response) => {
+  const data = await generateCertificate(positiveInt(request.params.id, 'Chứng chỉ'), 'da_duyet')
+  response.json({ success: true, data })
+})
+
+operationsRouter.post('/certificates/:id/reissue', async (request, response) => {
+  const data = await generateCertificate(positiveInt(request.params.id, 'Chứng chỉ'), 'da_cap')
+  response.json({ success: true, data })
 })
 
 operationsRouter.get('/reports', async (request, response) => {
