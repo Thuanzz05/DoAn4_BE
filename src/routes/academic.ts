@@ -5,7 +5,7 @@ import { database } from '../config/database'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { canChangeEnrollmentStatus, type EnrollmentStatus } from '../utils/enrollment'
 import { HttpError } from '../utils/http-error'
-import { generateSessionDates, roomCanHostClass, shouldSyncTeacherAssignment, type WeeklySlot } from '../utils/schedule'
+import { canChangeClassPlan, generateSessionDates, roomCanHostClass, shouldSyncTeacherAssignment, type WeeklySlot } from '../utils/schedule'
 
 type ClassStatus = 'sap_khai_giang' | 'dang_hoc' | 'da_ket_thuc' | 'da_huy'
 type ClassRow = RowDataPacket & {
@@ -301,21 +301,25 @@ academicRouter.patch('/classes/:id', async (request, response) => {
     [current.id, capacity],
   )
   if (smallRooms[0]) throw new HttpError(409, `Phòng ${smallRooms[0].roomCode} chỉ có ${smallRooms[0].roomCapacity} chỗ`)
-  const status = (request.body.status ?? current.status) as ClassStatus
-  if (!['sap_khai_giang', 'dang_hoc', 'da_ket_thuc', 'da_huy'].includes(status)) throw new HttpError(400, 'Trạng thái lớp không hợp lệ')
+  if (request.body.status !== undefined) {
+    throw new HttpError(400, 'Hãy dùng chức năng bắt đầu, kết thúc hoặc hủy lớp để đổi trạng thái')
+  }
+  const startDate = request.body.startDate === undefined ? current.startDate : date(request.body.startDate, 'Ngày khai giảng')
+  const sessions = request.body.sessions === undefined ? current.sessions : positiveInt(request.body.sessions, 'Số buổi')
+  if (!canChangeClassPlan(current.generatedSessions, current.startDate, current.sessions, startDate, sessions)) {
+    throw new HttpError(409, 'Không thể đổi ngày khai giảng hoặc số buổi sau khi đã sinh buổi học')
+  }
   const connection = await database.getConnection()
   try {
     await connection.beginTransaction()
     await connection.execute(
       `UPDATE lop_hoc SET ma_lop = ?, ten_lop = ?, khoa_hoc_id = ?, giao_vien_id = ?,
-       ngay_khai_giang = ?, so_buoi = ?, si_so_toi_da = ?, trang_thai = ? WHERE id = ?`,
+       ngay_khai_giang = ?, so_buoi = ?, si_so_toi_da = ? WHERE id = ?`,
       [
         request.body.code === undefined ? current.code : text(request.body.code, 'Mã lớp').toUpperCase(),
         request.body.name === undefined ? current.name : text(request.body.name, 'Tên lớp'),
         courseId, teacherId,
-        request.body.startDate === undefined ? current.startDate : date(request.body.startDate, 'Ngày khai giảng'),
-        request.body.sessions === undefined ? current.sessions : positiveInt(request.body.sessions, 'Số buổi'),
-        capacity, status, current.id,
+        startDate, sessions, capacity, current.id,
       ],
     )
     if (shouldSyncTeacherAssignment(current.teacherId, teacherId, current.generatedSessions)) {
@@ -439,7 +443,7 @@ academicRouter.post('/enrollments', async (request, response) => {
   const studentId = positiveInt(request.body.studentId, 'Học viên')
   const courseId = positiveInt(request.body.courseId, 'Khóa học')
   const classId = request.body.classId ? positiveInt(request.body.classId, 'Lớp học') : null
-  const enrolledAt = request.body.enrolledAt ? date(request.body.enrolledAt, 'Ngày ghi danh') : new Date().toISOString().slice(0, 10)
+  const enrolledAt = request.body.enrolledAt ? date(request.body.enrolledAt, 'Ngày ghi danh') : null
   const connection = await database.getConnection()
   try {
     await connection.beginTransaction()
@@ -463,7 +467,7 @@ academicRouter.post('/enrollments', async (request, response) => {
     const status: EnrollmentStatus = classId ? 'dang_hoc' : 'cho_xep_lop'
     const [result] = await connection.execute<ResultSetHeader>(
       `INSERT INTO ghi_danh (hoc_vien_id, khoa_hoc_id, lop_hoc_id, ngay_ghi_danh, trang_thai)
-       VALUES (?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, COALESCE(?, CURDATE()), ?)`,
       [studentId, courseId, classId, enrolledAt, status],
     )
     const invoiceCode = `HD-${new Date().getFullYear()}-${randomInt(100000, 1000000)}`

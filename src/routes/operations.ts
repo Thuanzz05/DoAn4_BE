@@ -20,8 +20,7 @@ type CandidateRow = SimpleRow & {
   paid: number
   certificateId: number | null
 }
-type CertificateIssueRow = RowDataPacket & {
-  status: string
+type CertificateIssueRow = CandidateRow & {
   certificateCode: string | null
   pdfPath: string | null
   studentCode: string
@@ -230,22 +229,22 @@ operationsRouter.post('/certificates/approve', async (request, response) => {
     ? [...new Set<number>(request.body.enrollmentIds.map((item: unknown) => positiveInt(item, 'Ghi danh')))]
     : []
   if (!ids.length) throw new HttpError(400, 'Danh sách ghi danh là bắt buộc')
-  const [rows] = await database.query<CandidateRow[]>(
-    `${candidateSelect} WHERE gd.id IN (${ids.map(() => '?').join(',')})`,
-    ids,
-  )
-  if (rows.length !== ids.length || rows.some((item) => !isCertificateEligible({
-    enrollmentStatus: item.enrollmentStatus,
-    paid: Boolean(item.paid),
-    attendance: Number(item.attendance),
-    average: item.average === null ? null : Number(item.average),
-  }))) {
-    throw new HttpError(409, 'Danh sách có học viên chưa đủ điều kiện cấp chứng chỉ')
-  }
-  if (rows.some((item) => item.certificateId !== null)) throw new HttpError(409, 'Danh sách có học viên đã được phê duyệt chứng chỉ')
   const connection = await database.getConnection()
   try {
     await connection.beginTransaction()
+    const [rows] = await connection.query<CandidateRow[]>(
+      `${candidateSelect} WHERE gd.id IN (${ids.map(() => '?').join(',')}) FOR UPDATE`,
+      ids,
+    )
+    if (rows.length !== ids.length || rows.some((item) => !isCertificateEligible({
+      enrollmentStatus: item.enrollmentStatus,
+      paid: Boolean(item.paid),
+      attendance: Number(item.attendance),
+      average: item.average === null ? null : Number(item.average),
+    }))) {
+      throw new HttpError(409, 'Danh sách có học viên chưa đủ điều kiện cấp chứng chỉ')
+    }
+    if (rows.some((item) => item.certificateId !== null)) throw new HttpError(409, 'Danh sách có học viên đã được phê duyệt chứng chỉ')
     let approved = 0
     for (const enrollmentId of ids) {
       const [result] = await connection.execute<ResultSetHeader>(
@@ -282,19 +281,20 @@ async function generateCertificate(certificateId: number, expectedStatus: 'da_du
   try {
     await connection.beginTransaction()
     const [certificates] = await connection.query<CertificateIssueRow[]>(
-      `SELECT cc.trang_thai AS status, cc.ma_chung_chi AS certificateCode,
-        cc.duong_dan_pdf AS pdfPath, hv.ma_nguoi_dung AS studentCode, hv.ho_ten AS studentName,
-        k.ten_khoa_hoc AS courseName, k.ngoai_ngu AS language,
-        l.ma_lop AS classCode, l.ten_lop AS className
-       FROM chung_chi cc JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id
-       JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
-       JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
-       JOIN lop_hoc l ON l.id = gd.lop_hoc_id
-       WHERE cc.id = ? AND cc.trang_thai = ? FOR UPDATE`,
+      `${candidateSelect} WHERE cc.id = ? AND cc.trang_thai = ? FOR UPDATE`,
       [certificateId, expectedStatus],
     )
     const certificate = certificates[0]
     if (!certificate) throw new HttpError(409, expectedStatus === 'da_duyet' ? 'Chứng chỉ không tồn tại hoặc đã được cấp' : 'Chỉ được cấp lại chứng chỉ đã phát hành')
+    const eligibility = {
+      enrollmentStatus: certificate.enrollmentStatus,
+      paid: Boolean(certificate.paid),
+      attendance: Number(certificate.attendance),
+      average: certificate.average === null ? null : Number(certificate.average),
+    }
+    if (!isCertificateEligible(eligibility)) {
+      throw new HttpError(409, `Không thể cấp chứng chỉ: ${getCertificateEligibilityReasons(eligibility).join('; ')}`)
+    }
     code = certificate.certificateCode ?? `CC-${new Date().getFullYear()}-${String(certificateId).padStart(6, '0')}`
     oldPdfPath = certificate.pdfPath
     await createCertificatePdf(outputPath, {

@@ -167,19 +167,31 @@ teacherRouter.put('/sessions/:id/attendance', async (request, response) => {
         : 'Chỉ được điểm danh sau khi buổi học bắt đầu')
     }
     const [enrollments] = await connection.query<SimpleRow[]>(
-      `SELECT id FROM ghi_danh WHERE lop_hoc_id = ? AND trang_thai IN ('dang_hoc', 'hoan_thanh') FOR UPDATE`,
-      [session.classId],
+      `SELECT gd.id, cc.id AS certificateId, dd.trang_thai AS currentStatus, dd.ghi_chu AS currentNote
+       FROM ghi_danh gd
+       LEFT JOIN chung_chi cc ON cc.ghi_danh_id = gd.id
+       LEFT JOIN diem_danh dd ON dd.ghi_danh_id = gd.id AND dd.buoi_hoc_id = ?
+       WHERE gd.lop_hoc_id = ? AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh') FOR UPDATE`,
+      [sessionId, session.classId],
     )
-    const validIds = new Set(enrollments.map((item) => Number(item.id)))
+    const enrollmentById = new Map(enrollments.map((item) => [Number(item.id), item]))
     const receivedIds = new Set<number>()
     for (const item of items as Record<string, unknown>[]) {
       const enrollmentId = positiveInt(item.enrollmentId, 'Ghi danh')
       const status = item.status as AttendanceStatus
-      if (!validIds.has(enrollmentId)) throw new HttpError(400, 'Học viên không thuộc lớp này')
+      const enrollment = enrollmentById.get(enrollmentId)
+      if (!enrollment) throw new HttpError(400, 'Học viên không thuộc lớp này')
       if (receivedIds.has(enrollmentId)) throw new HttpError(400, 'Danh sách điểm danh bị trùng học viên')
       if (!['co_mat', 'di_muon', 'vang'].includes(status)) throw new HttpError(400, 'Trạng thái điểm danh không hợp lệ')
       receivedIds.add(enrollmentId)
       const note = typeof item.note === 'string' && item.note.trim() ? item.note.trim().slice(0, 255) : null
+      const currentNote = enrollment.currentNote === null ? null : String(enrollment.currentNote)
+      if (enrollment.certificateId !== null) {
+        if (enrollment.currentStatus !== status || currentNote !== note) {
+          throw new HttpError(409, 'Học viên đã được duyệt chứng chỉ, không thể sửa điểm danh')
+        }
+        continue
+      }
       await connection.execute(
         `INSERT INTO diem_danh (buoi_hoc_id, ghi_danh_id, trang_thai, ghi_chu)
          VALUES (?, ?, ?, ?) AS incoming
@@ -188,7 +200,7 @@ teacherRouter.put('/sessions/:id/attendance', async (request, response) => {
         [sessionId, enrollmentId, status, note],
       )
     }
-    if (receivedIds.size !== validIds.size) throw new HttpError(400, 'Cần điểm danh đủ tất cả học viên trong lớp')
+    if (receivedIds.size !== enrollmentById.size) throw new HttpError(400, 'Cần điểm danh đủ tất cả học viên trong lớp')
     await connection.execute("UPDATE buoi_hoc SET trang_thai = 'da_hoc' WHERE id = ?", [sessionId])
     await connection.commit()
     response.json({ success: true, message: 'Đã lưu điểm danh', data: { saved: receivedIds.size } })
@@ -257,30 +269,45 @@ teacherRouter.put('/exams/:id/results', async (request, response) => {
       throw new HttpError(409, 'Đã hết hạn sửa điểm')
     }
     const [enrollments] = await connection.query<SimpleRow[]>(
-      `SELECT gd.id FROM ghi_danh gd
+      `SELECT gd.id, cc.id AS certificateId,
+        kq.nghe AS listening, kq.noi AS speaking, kq.doc AS reading, kq.viet AS writing
+       FROM ghi_danh gd
+       LEFT JOIN chung_chi cc ON cc.ghi_danh_id = gd.id
+       LEFT JOIN ket_qua_thi kq ON kq.ghi_danh_id = gd.id AND kq.ky_thi_id = ?
        WHERE gd.lop_hoc_id = ? AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')
          AND EXISTS (SELECT 1 FROM hoa_don hd
            WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
          AND NOT EXISTS (SELECT 1 FROM hoa_don hd
            WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan')
        FOR UPDATE`,
-      [exam.classId],
+      [examId, exam.classId],
     )
-    const validIds = new Set(enrollments.map((item) => Number(item.id)))
+    const enrollmentById = new Map(enrollments.map((item) => [Number(item.id), item]))
     const receivedIds = new Set<number>()
     for (const item of items as Record<string, unknown>[]) {
       const enrollmentId = positiveInt(item.enrollmentId, 'Ghi danh')
-      if (!validIds.has(enrollmentId)) throw new HttpError(400, 'Học viên không thuộc lớp hoặc chưa hoàn tất học phí')
+      const enrollment = enrollmentById.get(enrollmentId)
+      if (!enrollment) throw new HttpError(400, 'Học viên không thuộc lớp hoặc chưa hoàn tất học phí')
       if (receivedIds.has(enrollmentId)) throw new HttpError(400, 'Bảng điểm bị trùng học viên')
       const scores = [item.listening, item.speaking, item.reading, item.writing]
       if (!scores.every(isValidScore)) throw new HttpError(400, 'Điểm phải nằm trong khoảng từ 0 đến 10')
+      const normalizedScores = scores.map(Number)
+      const currentScores = [enrollment.listening, enrollment.speaking, enrollment.reading, enrollment.writing]
+        .map((score) => score === null ? null : Number(score))
+      if (enrollment.certificateId !== null) {
+        if (currentScores.some((score, index) => score !== normalizedScores[index])) {
+          throw new HttpError(409, 'Học viên đã được duyệt chứng chỉ, không thể sửa điểm thi')
+        }
+        receivedIds.add(enrollmentId)
+        continue
+      }
       receivedIds.add(enrollmentId)
       await connection.execute(
         `INSERT INTO ket_qua_thi (ky_thi_id, ghi_danh_id, nghe, noi, doc, viet)
          VALUES (?, ?, ?, ?, ?, ?) AS incoming
          ON DUPLICATE KEY UPDATE nghe = incoming.nghe, noi = incoming.noi,
           doc = incoming.doc, viet = incoming.viet`,
-        [examId, enrollmentId, ...scores.map(Number)],
+        [examId, enrollmentId, ...normalizedScores],
       )
     }
     await connection.commit()

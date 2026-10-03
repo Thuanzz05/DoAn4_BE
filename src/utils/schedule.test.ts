@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { canMarkAttendance, generateSessionDates, roomCanHostClass, shouldSyncTeacherAssignment } from './schedule'
+import { canChangeClassPlan, canMarkAttendance, generateSessionDates, roomCanHostClass, shouldSyncTeacherAssignment } from './schedule'
 
 test('sinh đủ buổi theo lịch thứ hai và thứ tư', () => {
   const sessions = generateSessionDates('2026-09-28', 3, [
@@ -31,4 +31,11 @@ test('đổi giáo viên phải đồng bộ các buổi học đã sinh', () =>
   assert.equal(shouldSyncTeacherAssignment(1, 1, 12), false)
   assert.equal(shouldSyncTeacherAssignment(1, 2, 0), false)
   assert.equal(shouldSyncTeacherAssignment(1, null, 12), false)
+})
+
+test('không đổi ngày khai giảng hoặc số buổi sau khi đã sinh lịch', () => {
+  assert.equal(canChangeClassPlan(0, '2026-10-01', 24, '2026-10-08', 30), true)
+  assert.equal(canChangeClassPlan(24, '2026-10-01', 24, '2026-10-01', 24), true)
+  assert.equal(canChangeClassPlan(24, '2026-10-01', 24, '2026-10-08', 24), false)
+  assert.equal(canChangeClassPlan(24, '2026-10-01', 24, '2026-10-01', 30), false)
 })

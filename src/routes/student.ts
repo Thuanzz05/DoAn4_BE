@@ -46,6 +46,25 @@ studentRouter.get('/dashboard', async (request, response) => {
      WHERE gd.hoc_vien_id = ? AND hd.trang_thai = 'chua_thanh_toan'`,
     [studentId],
   )
+  const [progress] = await database.query<SimpleRow[]>(
+    `SELECT COALESCE(ROUND(100 * SUM(completedSessions) / NULLIF(SUM(totalSessions), 0), 0), 0) AS courseProgress
+     FROM (
+       SELECT gd.id, l.so_buoi AS totalSessions,
+         LEAST(COUNT(DISTINCT CASE WHEN bh.trang_thai = 'da_hoc' THEN bh.id END), l.so_buoi) AS completedSessions
+       FROM ghi_danh gd JOIN lop_hoc l ON l.id = gd.lop_hoc_id
+       LEFT JOIN buoi_hoc bh ON bh.lop_hoc_id = l.id
+       WHERE gd.hoc_vien_id = ? AND gd.trang_thai = 'dang_hoc'
+       GROUP BY gd.id, l.so_buoi
+     ) activeCourses`,
+    [studentId],
+  )
+  const [certificates] = await database.query<SimpleRow[]>(
+    `SELECT COALESCE(SUM(cc.trang_thai = 'da_cap'), 0) AS issuedCertificates,
+      COALESCE(SUM(cc.trang_thai = 'da_duyet'), 0) AS approvedCertificates
+     FROM chung_chi cc JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id
+     WHERE gd.hoc_vien_id = ?`,
+    [studentId],
+  )
   const [nextSessions] = await database.query<SimpleRow[]>(
     `SELECT bh.id, l.ma_lop AS classCode, l.ten_lop AS className,
       bh.bat_dau AS startsAt, bh.ket_thuc AS endsAt, p.ma_phong AS roomCode,
@@ -61,7 +80,10 @@ studentRouter.get('/dashboard', async (request, response) => {
   )
   response.json({
     success: true,
-    data: { user: users[0], ...summary[0], ...debt[0], nextSession: nextSessions[0] ?? null },
+    data: {
+      user: users[0], ...summary[0], ...debt[0], ...progress[0], ...certificates[0],
+      nextSession: nextSessions[0] ?? null,
+    },
   })
 })
 
@@ -109,7 +131,7 @@ studentRouter.get('/sessions', async (request, response) => {
 studentRouter.get('/results', async (request, response) => {
   const studentId = request.auth!.userId
   const [exams] = await database.query(
-    `SELECT kt.id AS examId, kt.ten_ky_thi AS examName, kt.ngay_thi AS examDate,
+    `SELECT kt.id AS examId, gd.id AS enrollmentId, kt.ten_ky_thi AS examName, kt.ngay_thi AS examDate,
       l.id AS classId, l.ma_lop AS classCode, l.ten_lop AS className,
       kq.nghe AS listening, kq.noi AS speaking, kq.doc AS reading, kq.viet AS writing,
       CASE WHEN kq.nghe IS NULL OR kq.noi IS NULL OR kq.doc IS NULL OR kq.viet IS NULL THEN NULL
@@ -124,7 +146,8 @@ studentRouter.get('/results', async (request, response) => {
     [studentId],
   )
   const [attendance] = await database.query(
-    `SELECT bh.id AS sessionId, l.ma_lop AS classCode, l.ten_lop AS className,
+    `SELECT bh.id AS sessionId, gd.id AS enrollmentId, l.id AS classId,
+      l.ma_lop AS classCode, l.ten_lop AS className,
       bh.bat_dau AS startsAt, dd.trang_thai AS status, dd.ghi_chu AS note
      FROM ghi_danh gd JOIN diem_danh dd ON dd.ghi_danh_id = gd.id
      JOIN buoi_hoc bh ON bh.id = dd.buoi_hoc_id
@@ -188,7 +211,7 @@ studentRouter.get('/certificate-downloads', async (request, response) => {
 studentRouter.get('/certificate-eligibility', async (request, response) => {
   const [rows] = await database.query<SimpleRow[]>(
     `SELECT gd.id AS enrollmentId, gd.trang_thai AS enrollmentStatus,
-      k.ten_khoa_hoc AS courseName, l.ma_lop AS classCode, l.ten_lop AS className,
+      k.ten_khoa_hoc AS courseName, l.id AS classId, l.ma_lop AS classCode, l.ten_lop AS className,
       COALESCE((SELECT ROUND(100 * SUM(dd.trang_thai IN ('co_mat', 'di_muon')) /
         NULLIF(COUNT(*), 0), 0) FROM diem_danh dd WHERE dd.ghi_danh_id = gd.id), 0) AS attendance,
       (SELECT ROUND(AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4), 2)

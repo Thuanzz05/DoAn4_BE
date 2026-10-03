@@ -28,6 +28,17 @@ export function shouldSyncTeacherAssignment(
   return generatedSessions > 0 && nextTeacherId !== null && currentTeacherId !== nextTeacherId
 }
 
+export function canChangeClassPlan(
+  generatedSessions: number,
+  currentStartDate: string,
+  currentSessions: number,
+  nextStartDate: string,
+  nextSessions: number,
+): boolean {
+  return generatedSessions === 0
+    || (currentStartDate === nextStartDate && currentSessions === nextSessions)
+}
+
 function dateText(date: Date): string {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
