@@ -16,6 +16,18 @@ export function roomCanHostClass(roomCapacity: number, classCapacity: number): b
     && roomCapacity > 0 && classCapacity > 0 && roomCapacity >= classCapacity
 }
 
+export function canMarkAttendance(status: string, hasStarted: boolean): boolean {
+  return status !== 'da_huy' && hasStarted
+}
+
+export function shouldSyncTeacherAssignment(
+  currentTeacherId: number | null,
+  nextTeacherId: number | null,
+  generatedSessions: number,
+): boolean {
+  return generatedSessions > 0 && nextTeacherId !== null && currentTeacherId !== nextTeacherId
+}
+
 function dateText(date: Date): string {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')

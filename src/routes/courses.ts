@@ -14,6 +14,7 @@ type CourseRow = RowDataPacket & {
   tuition: number
   description: string | null
   status: 'dang_mo' | 'tam_an'
+  linkedClasses: number
 }
 type CourseInput = {
   code: string
@@ -29,7 +30,9 @@ type CourseInput = {
 export const coursesRouter = Router()
 const selectCourses = `SELECT id, ma_khoa_hoc AS code, ten_khoa_hoc AS name,
   ngoai_ngu AS language, trinh_do AS level, so_buoi AS sessions,
-  hoc_phi AS tuition, mo_ta AS description, trang_thai AS status FROM khoa_hoc`
+  hoc_phi AS tuition, mo_ta AS description, trang_thai AS status,
+  (SELECT COUNT(*) FROM lop_hoc WHERE khoa_hoc_id = khoa_hoc.id) AS linkedClasses
+  FROM khoa_hoc`
 
 function parseCourse(body: Record<string, unknown>, current?: CourseRow): CourseInput {
   const text = (key: keyof CourseInput, label: string): string => {

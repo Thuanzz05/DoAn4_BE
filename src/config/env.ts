@@ -1,5 +1,8 @@
 import 'dotenv/config'
+import { randomBytes } from 'node:crypto'
 import { resolve } from 'node:path'
+
+const nodeEnv = process.env.NODE_ENV ?? 'development'
 
 function readPort(value: string | undefined, fallback: number, name: string): number {
   const port = Number(value ?? fallback)
@@ -11,8 +14,12 @@ function readPort(value: string | undefined, fallback: number, name: string): nu
   return port
 }
 
-function secret(name: string, fallback: string): string {
-  const value = process.env[name] ?? fallback
+function secret(name: string): string {
+  const value = process.env[name]
+  if (!value) {
+    if (nodeEnv === 'production') throw new Error(`${name} là bắt buộc khi chạy production`)
+    return randomBytes(32).toString('hex')
+  }
   if (value.length < 32) throw new Error(`${name} phải có ít nhất 32 ký tự`)
   return value
 }
@@ -25,14 +32,14 @@ export const env = {
   publicUrl: (process.env.PUBLIC_URL ?? `http://localhost:${port}`).replace(/\/$/, ''),
   storageDir: resolve(process.env.STORAGE_DIR ?? 'storage'),
   certificateFontPath: process.env.CERTIFICATE_FONT_PATH ?? '',
-  nodeEnv: process.env.NODE_ENV ?? 'development',
+  nodeEnv,
   dbHost: process.env.DB_HOST ?? '127.0.0.1',
   dbPort: readPort(process.env.DB_PORT, 3306, 'DB_PORT'),
   dbUser: process.env.DB_USER ?? 'root',
   dbPassword: process.env.DB_PASSWORD ?? '',
   dbName: process.env.DB_NAME ?? 'doan4',
-  jwtSecret: secret('JWT_SECRET', 'dev-jwt-secret-thay-khi-trien-khai-123456'),
-  otpSecret: secret('OTP_SECRET', 'dev-otp-secret-thay-khi-trien-khai-123456'),
+  jwtSecret: secret('JWT_SECRET'),
+  otpSecret: secret('OTP_SECRET'),
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? '',
   smtpHost: process.env.SMTP_HOST ?? '',
   smtpPort: readPort(process.env.SMTP_PORT, 465, 'SMTP_PORT'),

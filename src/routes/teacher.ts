@@ -2,8 +2,10 @@ import { Router } from 'express'
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { database } from '../config/database'
 import { requireAuth, requireRole } from '../middlewares/auth'
+import { normalizeLocalDateTime } from '../utils/date-time'
 import { isValidScore } from '../utils/grades'
 import { HttpError } from '../utils/http-error'
+import { canMarkAttendance } from '../utils/schedule'
 
 type SimpleRow = RowDataPacket & Record<string, string | number | null>
 type AttendanceStatus = 'co_mat' | 'di_muon' | 'vang'
@@ -27,8 +29,9 @@ function optionalDate(value: unknown, label: string): string | null {
 
 function optionalDateTime(value: unknown, label: string): string | null {
   if (value === undefined || value === null || value === '') return null
-  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) throw new HttpError(400, `${label} không hợp lệ`)
-  return new Date(value).toISOString().slice(0, 19).replace('T', ' ')
+  const normalized = typeof value === 'string' ? normalizeLocalDateTime(value) : null
+  if (!normalized) throw new HttpError(400, `${label} không hợp lệ`)
+  return normalized
 }
 
 async function ensureOwnedClass(teacherId: number, classId: number, connection: PoolConnection | typeof database = database): Promise<void> {
@@ -41,7 +44,9 @@ async function ensureOwnedClass(teacherId: number, classId: number, connection: 
 
 async function ownedSession(teacherId: number, sessionId: number, connection: PoolConnection | typeof database = database): Promise<SimpleRow> {
   const [rows] = await connection.query<SimpleRow[]>(
-    `SELECT id, lop_hoc_id AS classId FROM buoi_hoc WHERE id = ? AND giao_vien_id = ?`,
+    `SELECT id, lop_hoc_id AS classId, trang_thai AS status,
+      bat_dau <= NOW() AS hasStarted
+     FROM buoi_hoc WHERE id = ? AND giao_vien_id = ?`,
     [sessionId, teacherId],
   )
   if (!rows[0]) throw new HttpError(404, 'Không tìm thấy buổi học được phân công')
@@ -50,7 +55,8 @@ async function ownedSession(teacherId: number, sessionId: number, connection: Po
 
 async function ownedExam(teacherId: number, examId: number, connection: PoolConnection | typeof database = database): Promise<SimpleRow> {
   const [rows] = await connection.query<SimpleRow[]>(
-    `SELECT kt.id, kt.lop_hoc_id AS classId, kt.han_sua_diem AS deadline
+    `SELECT kt.id, kt.lop_hoc_id AS classId, kt.han_sua_diem AS deadline,
+      kt.han_sua_diem IS NOT NULL AND kt.han_sua_diem < NOW() AS deadlinePassed
      FROM ky_thi kt JOIN lop_hoc l ON l.id = kt.lop_hoc_id
      WHERE kt.id = ? AND l.giao_vien_id = ?`,
     [examId, teacherId],
@@ -155,6 +161,11 @@ teacherRouter.put('/sessions/:id/attendance', async (request, response) => {
   try {
     await connection.beginTransaction()
     const session = await ownedSession(request.auth!.userId, sessionId, connection)
+    if (!canMarkAttendance(String(session.status), Boolean(Number(session.hasStarted)))) {
+      throw new HttpError(409, session.status === 'da_huy'
+        ? 'Không thể điểm danh buổi học đã hủy'
+        : 'Chỉ được điểm danh sau khi buổi học bắt đầu')
+    }
     const [enrollments] = await connection.query<SimpleRow[]>(
       `SELECT id FROM ghi_danh WHERE lop_hoc_id = ? AND trang_thai IN ('dang_hoc', 'hoan_thanh') FOR UPDATE`,
       [session.classId],
@@ -242,7 +253,7 @@ teacherRouter.put('/exams/:id/results', async (request, response) => {
   try {
     await connection.beginTransaction()
     const exam = await ownedExam(request.auth!.userId, examId, connection)
-    if (exam.deadline && new Date(String(exam.deadline)).getTime() < Date.now()) {
+    if (Boolean(Number(exam.deadlinePassed))) {
       throw new HttpError(409, 'Đã hết hạn sửa điểm')
     }
     const [enrollments] = await connection.query<SimpleRow[]>(

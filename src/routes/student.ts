@@ -114,8 +114,10 @@ studentRouter.get('/results', async (request, response) => {
       kq.nghe AS listening, kq.noi AS speaking, kq.doc AS reading, kq.viet AS writing,
       CASE WHEN kq.nghe IS NULL OR kq.noi IS NULL OR kq.doc IS NULL OR kq.viet IS NULL THEN NULL
         ELSE ROUND((kq.nghe + kq.noi + kq.doc + kq.viet) / 4, 2) END AS average
-     FROM ghi_danh gd JOIN lop_hoc l ON l.id = gd.lop_hoc_id
-     JOIN ky_thi kt ON kt.lop_hoc_id = l.id
+     FROM ghi_danh gd JOIN ky_thi kt ON kt.lop_hoc_id = gd.lop_hoc_id
+       OR EXISTS (SELECT 1 FROM ket_qua_thi old
+         WHERE old.ky_thi_id = kt.id AND old.ghi_danh_id = gd.id)
+     JOIN lop_hoc l ON l.id = kt.lop_hoc_id
      LEFT JOIN ket_qua_thi kq ON kq.ky_thi_id = kt.id AND kq.ghi_danh_id = gd.id
      WHERE gd.hoc_vien_id = ? AND gd.trang_thai <> 'da_huy'
      ORDER BY kt.ngay_thi DESC, kt.id DESC`,
@@ -124,9 +126,9 @@ studentRouter.get('/results', async (request, response) => {
   const [attendance] = await database.query(
     `SELECT bh.id AS sessionId, l.ma_lop AS classCode, l.ten_lop AS className,
       bh.bat_dau AS startsAt, dd.trang_thai AS status, dd.ghi_chu AS note
-     FROM ghi_danh gd JOIN lop_hoc l ON l.id = gd.lop_hoc_id
-     JOIN diem_danh dd ON dd.ghi_danh_id = gd.id
+     FROM ghi_danh gd JOIN diem_danh dd ON dd.ghi_danh_id = gd.id
      JOIN buoi_hoc bh ON bh.id = dd.buoi_hoc_id
+     JOIN lop_hoc l ON l.id = bh.lop_hoc_id
      WHERE gd.hoc_vien_id = ? ORDER BY bh.bat_dau DESC`,
     [studentId],
   )
