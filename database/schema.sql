@@ -193,12 +193,21 @@ CREATE TABLE IF NOT EXISTS chung_chi (
   ngay_duyet DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   ngay_cap DATETIME NULL,
   duong_dan_pdf VARCHAR(500) NULL,
+  ma_hoc_vien_luc_cap VARCHAR(20) NULL,
+  ten_hoc_vien_luc_cap VARCHAR(150) NULL,
+  ten_khoa_hoc_luc_cap VARCHAR(150) NULL,
+  ngoai_ngu_luc_cap VARCHAR(50) NULL,
+  ma_lop_luc_cap VARCHAR(30) NULL,
+  ten_lop_luc_cap VARCHAR(150) NULL,
   CONSTRAINT fk_chung_chi_ghi_danh FOREIGN KEY (ghi_danh_id) REFERENCES ghi_danh(id),
   CONSTRAINT fk_chung_chi_nguoi_duyet FOREIGN KEY (nguoi_duyet_id) REFERENCES nguoi_dung(id),
   CONSTRAINT chk_chung_chi_da_cap CHECK (
     trang_thai <> 'da_cap' OR
     (ma_chung_chi IS NOT NULL AND ma_xac_thuc IS NOT NULL
-     AND ngay_cap IS NOT NULL AND duong_dan_pdf IS NOT NULL)
+     AND ngay_cap IS NOT NULL AND duong_dan_pdf IS NOT NULL
+     AND ma_hoc_vien_luc_cap IS NOT NULL AND ten_hoc_vien_luc_cap IS NOT NULL
+     AND ten_khoa_hoc_luc_cap IS NOT NULL AND ngoai_ngu_luc_cap IS NOT NULL
+     AND ma_lop_luc_cap IS NOT NULL AND ten_lop_luc_cap IS NOT NULL)
   )
 ) ENGINE=InnoDB;
 

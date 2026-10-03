@@ -38,6 +38,8 @@ export function isCertificateEligible(input: {
   paid: boolean
   attendance: number
   average: number | null
+  requiredExams: number
+  completedExams: number
 }): boolean {
   return getCertificateEligibilityReasons(input).length === 0
 }
@@ -47,12 +49,16 @@ export function getCertificateEligibilityReasons(input: {
   paid: boolean
   attendance: number
   average: number | null
+  requiredExams: number
+  completedExams: number
 }): string[] {
   const reasons: string[] = []
   if (input.enrollmentStatus !== 'hoan_thanh') reasons.push('Chưa hoàn thành khóa học')
   if (!input.paid) reasons.push('Chưa hoàn tất học phí')
   if (input.attendance < 80) reasons.push('Tỷ lệ chuyên cần dưới 80%')
-  if (input.average === null) reasons.push('Chưa có đủ điểm thi')
+  if (input.requiredExams === 0) reasons.push('Lớp học chưa có kỳ thi')
+  else if (input.completedExams < input.requiredExams) reasons.push(`Chưa hoàn thành tất cả kỳ thi (${input.completedExams}/${input.requiredExams})`)
+  else if (input.average === null) reasons.push('Chưa có đủ điểm thi')
   else if (input.average < 5) reasons.push('Điểm trung bình dưới 5')
   return reasons
 }

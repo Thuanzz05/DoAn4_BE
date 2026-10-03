@@ -17,6 +17,8 @@ type CandidateRow = SimpleRow & {
   enrollmentStatus: string
   attendance: number
   average: number | null
+  requiredExams: number
+  completedExams: number
   paid: number
   certificateId: number | null
 }
@@ -66,15 +68,24 @@ const invoiceSelect = `SELECT hd.id, hd.ma_hoa_don AS code, hd.ghi_danh_id AS en
   LEFT JOIN lop_hoc l ON l.id = gd.lop_hoc_id`
 
 const candidateSelect = `SELECT gd.id AS enrollmentId, gd.trang_thai AS enrollmentStatus,
-  hv.ma_nguoi_dung AS studentCode, hv.ho_ten AS studentName,
-  l.ma_lop AS classCode, l.ten_lop AS className,
-  k.ten_khoa_hoc AS courseName, k.ngoai_ngu AS language,
+  COALESCE(cc.ma_hoc_vien_luc_cap, hv.ma_nguoi_dung) AS studentCode,
+  COALESCE(cc.ten_hoc_vien_luc_cap, hv.ho_ten) AS studentName,
+  COALESCE(cc.ma_lop_luc_cap, l.ma_lop) AS classCode,
+  COALESCE(cc.ten_lop_luc_cap, l.ten_lop) AS className,
+  COALESCE(cc.ten_khoa_hoc_luc_cap, k.ten_khoa_hoc) AS courseName,
+  COALESCE(cc.ngoai_ngu_luc_cap, k.ngoai_ngu) AS language,
   COALESCE((SELECT ROUND(100 * SUM(dd.trang_thai IN ('co_mat', 'di_muon')) / NULLIF(COUNT(*), 0), 0)
     FROM diem_danh dd WHERE dd.ghi_danh_id = gd.id), 0) AS attendance,
   (SELECT ROUND(AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4), 2)
-    FROM ket_qua_thi kq WHERE kq.ghi_danh_id = gd.id
+    FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
+    WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id
       AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
       AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS average,
+  (SELECT COUNT(*) FROM ky_thi kt WHERE kt.lop_hoc_id = gd.lop_hoc_id) AS requiredExams,
+  (SELECT COUNT(*) FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
+    WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id
+      AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
+      AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS completedExams,
   (EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
     AND NOT EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan')) AS paid,
   cc.id AS certificateId, cc.ma_chung_chi AS certificateCode,
@@ -89,12 +100,9 @@ operationsRouter.get('/certificates/verify/:code', async (request, response) => 
   const code = requiredText(request.params.code, 'Mã xác thực')
   const [rows] = await database.query<SimpleRow[]>(
     `SELECT cc.ma_chung_chi AS certificateCode, cc.ma_xac_thuc AS verificationCode,
-      cc.ngay_cap AS issuedAt, hv.ho_ten AS studentName,
-      k.ten_khoa_hoc AS courseName, l.ten_lop AS className
-     FROM chung_chi cc JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id
-     JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
-     JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
-     LEFT JOIN lop_hoc l ON l.id = gd.lop_hoc_id
+      cc.ngay_cap AS issuedAt, cc.ten_hoc_vien_luc_cap AS studentName,
+      cc.ten_khoa_hoc_luc_cap AS courseName, cc.ten_lop_luc_cap AS className
+     FROM chung_chi cc
      WHERE cc.ma_xac_thuc = ? AND cc.trang_thai = 'da_cap'`,
     [code],
   )
@@ -218,6 +226,8 @@ operationsRouter.get('/certificates/candidates', async (_request, response) => {
         paid: Boolean(item.paid),
         attendance: Number(item.attendance),
         average: item.average === null ? null : Number(item.average),
+        requiredExams: Number(item.requiredExams),
+        completedExams: Number(item.completedExams),
       }
       return { ...item, eligible: isCertificateEligible(input), ineligibleReasons: getCertificateEligibilityReasons(input) }
     }),
@@ -241,6 +251,8 @@ operationsRouter.post('/certificates/approve', async (request, response) => {
       paid: Boolean(item.paid),
       attendance: Number(item.attendance),
       average: item.average === null ? null : Number(item.average),
+      requiredExams: Number(item.requiredExams),
+      completedExams: Number(item.completedExams),
     }))) {
       throw new HttpError(409, 'Danh sách có học viên chưa đủ điều kiện cấp chứng chỉ')
     }
@@ -291,6 +303,8 @@ async function generateCertificate(certificateId: number, expectedStatus: 'da_du
       paid: Boolean(certificate.paid),
       attendance: Number(certificate.attendance),
       average: certificate.average === null ? null : Number(certificate.average),
+      requiredExams: Number(certificate.requiredExams),
+      completedExams: Number(certificate.completedExams),
     }
     if (!isCertificateEligible(eligibility)) {
       throw new HttpError(409, `Không thể cấp chứng chỉ: ${getCertificateEligibilityReasons(eligibility).join('; ')}`)
@@ -310,8 +324,12 @@ async function generateCertificate(certificateId: number, expectedStatus: 'da_du
     })
     const [result] = await connection.execute<ResultSetHeader>(
       `UPDATE chung_chi SET ma_chung_chi = ?, ma_xac_thuc = ?, trang_thai = 'da_cap',
-        ngay_cap = NOW(), duong_dan_pdf = ? WHERE id = ? AND trang_thai = ?`,
-      [code, verificationCode, pdfPath, certificateId, expectedStatus],
+        ngay_cap = NOW(), duong_dan_pdf = ?, ma_hoc_vien_luc_cap = ?, ten_hoc_vien_luc_cap = ?,
+        ten_khoa_hoc_luc_cap = ?, ngoai_ngu_luc_cap = ?, ma_lop_luc_cap = ?, ten_lop_luc_cap = ?
+       WHERE id = ? AND trang_thai = ?`,
+      [code, verificationCode, pdfPath, certificate.studentCode, certificate.studentName,
+        certificate.courseName, certificate.language, certificate.classCode, certificate.className,
+        certificateId, expectedStatus],
     )
     if (!result.affectedRows) throw new HttpError(409, 'Trạng thái chứng chỉ đã thay đổi, vui lòng thử lại')
     await connection.execute(

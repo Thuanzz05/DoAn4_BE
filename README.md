@@ -10,6 +10,9 @@ Backend Node.js + TypeScript + Express + MySQL cho hệ thống quản lý trung
 4. Đặt `ADMIN_PASSWORD` trong `.env`, sau đó chạy `npm run create-admin` đúng một lần.
 5. Chạy `npm run dev`.
 
+Nếu nâng cấp từ phiên bản cũ đã có dữ liệu, chạy một lần
+`database/migrations/20261003_toan_ven_chung_chi.sql` trong MySQL Workbench trước khi khởi động backend.
+
 Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/health`.
 
 ## API đã có

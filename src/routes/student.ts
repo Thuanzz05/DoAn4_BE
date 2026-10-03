@@ -178,8 +178,10 @@ studentRouter.get('/certificates', async (request, response) => {
   const [rows] = await database.query(
     `SELECT cc.id, cc.ma_chung_chi AS code, cc.ma_xac_thuc AS verificationCode,
       cc.trang_thai AS status, cc.ngay_duyet AS approvedAt, cc.ngay_cap AS issuedAt,
-      cc.duong_dan_pdf AS pdfPath, k.ten_khoa_hoc AS courseName,
-      l.ma_lop AS classCode, l.ten_lop AS className,
+      cc.duong_dan_pdf AS pdfPath,
+      COALESCE(cc.ten_khoa_hoc_luc_cap, k.ten_khoa_hoc) AS courseName,
+      COALESCE(cc.ma_lop_luc_cap, l.ma_lop) AS classCode,
+      COALESCE(cc.ten_lop_luc_cap, l.ten_lop) AS className,
       (SELECT ROUND(AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4), 2)
        FROM ket_qua_thi kq WHERE kq.ghi_danh_id = gd.id
          AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
@@ -198,7 +200,8 @@ studentRouter.get('/certificates', async (request, response) => {
 studentRouter.get('/certificate-downloads', async (request, response) => {
   const [rows] = await database.query(
     `SELECT lt.id, cc.ma_chung_chi AS certificateCode,
-      k.ten_khoa_hoc AS courseName, lt.thoi_gian_tai AS downloadedAt
+      COALESCE(cc.ten_khoa_hoc_luc_cap, k.ten_khoa_hoc) AS courseName,
+      lt.thoi_gian_tai AS downloadedAt
      FROM luot_tai_chung_chi lt JOIN chung_chi cc ON cc.id = lt.chung_chi_id
      JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id
      JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
@@ -215,9 +218,15 @@ studentRouter.get('/certificate-eligibility', async (request, response) => {
       COALESCE((SELECT ROUND(100 * SUM(dd.trang_thai IN ('co_mat', 'di_muon')) /
         NULLIF(COUNT(*), 0), 0) FROM diem_danh dd WHERE dd.ghi_danh_id = gd.id), 0) AS attendance,
       (SELECT ROUND(AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4), 2)
-        FROM ket_qua_thi kq WHERE kq.ghi_danh_id = gd.id
+        FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
+        WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id
           AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
           AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS average,
+      (SELECT COUNT(*) FROM ky_thi kt WHERE kt.lop_hoc_id = gd.lop_hoc_id) AS requiredExams,
+      (SELECT COUNT(*) FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
+        WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id
+          AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
+          AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS completedExams,
       (EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
         AND NOT EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan')) AS paid
      FROM ghi_danh gd JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
@@ -234,6 +243,8 @@ studentRouter.get('/certificate-eligibility', async (request, response) => {
         paid: Boolean(item.paid),
         attendance: Number(item.attendance),
         average: item.average === null ? null : Number(item.average),
+        requiredExams: Number(item.requiredExams),
+        completedExams: Number(item.completedExams),
       }
       return { ...item, eligible: isCertificateEligible(input), ineligibleReasons: getCertificateEligibilityReasons(input) }
     }),
