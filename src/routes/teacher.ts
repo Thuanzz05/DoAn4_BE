@@ -63,7 +63,7 @@ teacherRouter.get('/dashboard', async (request, response) => {
   const teacherId = request.auth!.userId
   const [summary] = await database.query<SimpleRow[]>(
     `SELECT COUNT(DISTINCT l.id) AS classes,
-      COUNT(DISTINCT CASE WHEN gd.trang_thai IN ('dang_hoc', 'bao_luu') THEN gd.id END) AS students,
+      COUNT(DISTINCT CASE WHEN gd.trang_thai IN ('dang_hoc', 'hoan_thanh') THEN gd.id END) AS students,
       COUNT(DISTINCT CASE WHEN YEARWEEK(bh.bat_dau, 1) = YEARWEEK(CURDATE(), 1) THEN bh.id END) AS sessionsThisWeek,
       COUNT(DISTINCT CASE WHEN bh.bat_dau < NOW() AND bh.trang_thai = 'da_len_lich' THEN bh.id END) AS attendanceDue
      FROM lop_hoc l
@@ -89,12 +89,17 @@ teacherRouter.get('/classes', async (request, response) => {
   const [rows] = await database.query(
     `SELECT l.id, l.ma_lop AS code, l.ten_lop AS name, k.ten_khoa_hoc AS courseName,
       l.ngay_khai_giang AS startDate, l.so_buoi AS sessions, l.trang_thai AS status,
-      COUNT(DISTINCT CASE WHEN gd.trang_thai <> 'da_huy' THEN gd.id END) AS students,
+      COUNT(DISTINCT gd.id) AS students,
+      COALESCE(ROUND(100 * COUNT(DISTINCT CASE WHEN dd.trang_thai IN ('co_mat', 'di_muon') THEN dd.id END) /
+        NULLIF(COUNT(DISTINCT dd.id), 0), 0), 0) AS attendanceRate,
+      COUNT(DISTINCT CASE WHEN bh.bat_dau < NOW() AND bh.trang_thai = 'da_len_lich' THEN bh.id END) AS pendingAttendance,
       GROUP_CONCAT(DISTINCT CONCAT(lh.thu_trong_tuan, '|', TIME_FORMAT(lh.gio_bat_dau, '%H:%i'), '|', TIME_FORMAT(lh.gio_ket_thuc, '%H:%i'))
         ORDER BY lh.thu_trong_tuan, lh.gio_bat_dau SEPARATOR ',') AS weeklySchedule
      FROM lop_hoc l JOIN khoa_hoc k ON k.id = l.khoa_hoc_id
-     LEFT JOIN ghi_danh gd ON gd.lop_hoc_id = l.id
+     LEFT JOIN ghi_danh gd ON gd.lop_hoc_id = l.id AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')
      LEFT JOIN lich_hang_tuan lh ON lh.lop_hoc_id = l.id
+     LEFT JOIN buoi_hoc bh ON bh.lop_hoc_id = l.id
+     LEFT JOIN diem_danh dd ON dd.buoi_hoc_id = bh.id AND dd.ghi_danh_id = gd.id
      WHERE l.giao_vien_id = ? AND l.trang_thai <> 'da_huy'
      GROUP BY l.id ORDER BY l.id DESC`,
     [request.auth!.userId],
@@ -109,7 +114,7 @@ teacherRouter.get('/sessions', async (request, response) => {
     `SELECT bh.id, bh.lop_hoc_id AS classId, l.ma_lop AS classCode, l.ten_lop AS className,
       bh.bat_dau AS startsAt, bh.ket_thuc AS endsAt, bh.trang_thai AS status,
       p.id AS roomId, p.ma_phong AS roomCode,
-      COUNT(DISTINCT CASE WHEN gd.trang_thai <> 'da_huy' THEN gd.id END) AS students,
+      COUNT(DISTINCT CASE WHEN gd.trang_thai IN ('dang_hoc', 'hoan_thanh') THEN gd.id END) AS students,
       COUNT(DISTINCT dd.id) AS attendanceMarked
      FROM buoi_hoc bh JOIN lop_hoc l ON l.id = bh.lop_hoc_id
      JOIN phong_hoc p ON p.id = bh.phong_hoc_id
@@ -135,7 +140,7 @@ teacherRouter.get('/sessions/:id/attendance', async (request, response) => {
      FROM ghi_danh gd JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
      LEFT JOIN diem_danh dd ON dd.ghi_danh_id = gd.id AND dd.buoi_hoc_id = ?
      LEFT JOIN diem_danh old ON old.ghi_danh_id = gd.id
-     WHERE gd.lop_hoc_id = ? AND gd.trang_thai <> 'da_huy'
+     WHERE gd.lop_hoc_id = ? AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')
      GROUP BY gd.id, dd.id ORDER BY hv.ho_ten`,
     [sessionId, session.classId],
   )
@@ -151,7 +156,7 @@ teacherRouter.put('/sessions/:id/attendance', async (request, response) => {
     await connection.beginTransaction()
     const session = await ownedSession(request.auth!.userId, sessionId, connection)
     const [enrollments] = await connection.query<SimpleRow[]>(
-      `SELECT id FROM ghi_danh WHERE lop_hoc_id = ? AND trang_thai <> 'da_huy' FOR UPDATE`,
+      `SELECT id FROM ghi_danh WHERE lop_hoc_id = ? AND trang_thai IN ('dang_hoc', 'hoan_thanh') FOR UPDATE`,
       [session.classId],
     )
     const validIds = new Set(enrollments.map((item) => Number(item.id)))
@@ -218,7 +223,7 @@ teacherRouter.get('/exams/:id/results', async (request, response) => {
         ELSE ROUND((kq.nghe + kq.noi + kq.doc + kq.viet) / 4, 2) END AS average
      FROM ghi_danh gd JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
      LEFT JOIN ket_qua_thi kq ON kq.ghi_danh_id = gd.id AND kq.ky_thi_id = ?
-     WHERE gd.lop_hoc_id = ? AND gd.trang_thai <> 'da_huy'
+     WHERE gd.lop_hoc_id = ? AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')
        AND EXISTS (SELECT 1 FROM hoa_don hd
          WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
        AND NOT EXISTS (SELECT 1 FROM hoa_don hd
@@ -242,7 +247,7 @@ teacherRouter.put('/exams/:id/results', async (request, response) => {
     }
     const [enrollments] = await connection.query<SimpleRow[]>(
       `SELECT gd.id FROM ghi_danh gd
-       WHERE gd.lop_hoc_id = ? AND gd.trang_thai <> 'da_huy'
+       WHERE gd.lop_hoc_id = ? AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')
          AND EXISTS (SELECT 1 FROM hoa_don hd
            WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
          AND NOT EXISTS (SELECT 1 FROM hoa_don hd

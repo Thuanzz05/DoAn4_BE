@@ -6,7 +6,7 @@ import { database } from '../config/database'
 import { env } from '../config/env'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { sendTemporaryPassword } from '../services/mailer'
-import { generateTemporaryPassword } from '../utils/account'
+import { generateTemporaryPassword, isValidBirthDate } from '../utils/account'
 import { HttpError } from '../utils/http-error'
 
 type VaiTro = 'quan_tri' | 'giao_vien' | 'hoc_vien'
@@ -51,6 +51,12 @@ function positiveInt(value: unknown, label: string): number {
   return parsed
 }
 
+function birthDate(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null
+  if (!isValidBirthDate(value)) throw new HttpError(400, 'Ngày sinh không hợp lệ')
+  return value
+}
+
 usersRouter.get('/', async (request, response) => {
   const role = request.query.role
   if (role && !['quan_tri', 'giao_vien', 'hoc_vien'].includes(String(role))) {
@@ -74,6 +80,7 @@ usersRouter.post('/', async (request, response) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Email không hợp lệ')
   if (!/^0\d{9}$/.test(phone)) throw new HttpError(400, 'Số điện thoại phải gồm 10 chữ số')
   if (password.length < 8) throw new HttpError(400, 'Mật khẩu phải có ít nhất 8 ký tự')
+  const validatedBirthDate = birthDate(request.body.birthDate)
   const passwordHash = await bcrypt.hash(password, 12)
   try {
     const [result] = await database.execute<ResultSetHeader>(
@@ -83,7 +90,7 @@ usersRouter.post('/', async (request, response) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         newCode(role), fullName, email, phone, passwordHash, role,
-        request.body.birthDate || null,
+        validatedBirthDate,
         role === 'giao_vien' ? request.body.teachingLanguage || null : null,
         role === 'giao_vien' ? request.body.specialty || null : null,
       ],
@@ -105,12 +112,13 @@ usersRouter.patch('/:id', async (request, response) => {
   const phone = request.body.phone === undefined ? user.phone : text(request.body.phone, 'Số điện thoại').replace(/\s/g, '')
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Email không hợp lệ')
   if (phone && !/^0\d{9}$/.test(phone)) throw new HttpError(400, 'Số điện thoại phải gồm 10 chữ số')
+  const validatedBirthDate = request.body.birthDate === undefined ? user.birthDate : birthDate(request.body.birthDate)
   try {
     await database.execute(
       `UPDATE nguoi_dung SET ho_ten = ?, email = ?, so_dien_thoai = ?, ngay_sinh = ?,
        ngon_ngu_giang_day = ?, chuyen_mon = ? WHERE id = ?`,
       [
-        fullName, email, phone, request.body.birthDate ?? user.birthDate,
+        fullName, email, phone, validatedBirthDate,
         user.role === 'giao_vien' ? request.body.teachingLanguage ?? user.teachingLanguage : null,
         user.role === 'giao_vien' ? request.body.specialty ?? user.specialty : null,
         user.id,

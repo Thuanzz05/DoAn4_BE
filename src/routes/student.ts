@@ -31,7 +31,7 @@ studentRouter.get('/dashboard', async (request, response) => {
     [studentId],
   )
   const [summary] = await database.query<SimpleRow[]>(
-    `SELECT COUNT(DISTINCT CASE WHEN gd.trang_thai IN ('dang_hoc', 'bao_luu') THEN gd.lop_hoc_id END) AS activeClasses,
+    `SELECT COUNT(DISTINCT CASE WHEN gd.trang_thai = 'dang_hoc' THEN gd.lop_hoc_id END) AS activeClasses,
       COUNT(DISTINCT CASE WHEN dd.trang_thai = 'co_mat' THEN dd.id END) AS present,
       COUNT(DISTINCT CASE WHEN dd.trang_thai = 'di_muon' THEN dd.id END) AS late,
       COUNT(DISTINCT CASE WHEN dd.trang_thai = 'vang' THEN dd.id END) AS absent
@@ -54,7 +54,7 @@ studentRouter.get('/dashboard', async (request, response) => {
      JOIN buoi_hoc bh ON bh.lop_hoc_id = l.id
      JOIN phong_hoc p ON p.id = bh.phong_hoc_id
      JOIN nguoi_dung gv ON gv.id = bh.giao_vien_id
-     WHERE gd.hoc_vien_id = ? AND gd.trang_thai <> 'da_huy'
+     WHERE gd.hoc_vien_id = ? AND gd.trang_thai = 'dang_hoc'
        AND bh.bat_dau >= NOW() AND bh.trang_thai = 'da_len_lich'
      ORDER BY bh.bat_dau LIMIT 1`,
     [studentId],
@@ -97,7 +97,7 @@ studentRouter.get('/sessions', async (request, response) => {
      JOIN phong_hoc p ON p.id = bh.phong_hoc_id
      JOIN nguoi_dung gv ON gv.id = bh.giao_vien_id
      LEFT JOIN diem_danh dd ON dd.buoi_hoc_id = bh.id AND dd.ghi_danh_id = gd.id
-     WHERE gd.hoc_vien_id = ? AND gd.trang_thai <> 'da_huy'
+     WHERE gd.hoc_vien_id = ? AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')
        AND (? IS NULL OR DATE(bh.bat_dau) >= ?)
        AND (? IS NULL OR DATE(bh.bat_dau) <= ?)
      ORDER BY bh.bat_dau`,

@@ -11,6 +11,11 @@ export type GeneratedSession = {
   endsAt: string
 }
 
+export function roomCanHostClass(roomCapacity: number, classCapacity: number): boolean {
+  return Number.isInteger(roomCapacity) && Number.isInteger(classCapacity)
+    && roomCapacity > 0 && classCapacity > 0 && roomCapacity >= classCapacity
+}
+
 function dateText(date: Date): string {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
