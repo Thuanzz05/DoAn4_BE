@@ -1,6 +1,9 @@
 import { Router } from 'express'
+import { stat } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { database } from '../config/database'
+import { env } from '../config/env'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { HttpError } from '../utils/http-error'
 import { getCertificateEligibilityReasons, isCertificateEligible } from '../utils/operations'
@@ -60,7 +63,7 @@ studentRouter.get('/dashboard', async (request, response) => {
          LEAST(COUNT(DISTINCT CASE WHEN bh.trang_thai = 'da_hoc' THEN bh.id END), l.so_buoi) AS completedSessions
        FROM ghi_danh gd JOIN lop_hoc l ON l.id = gd.lop_hoc_id
        LEFT JOIN buoi_hoc bh ON bh.lop_hoc_id = l.id
-       WHERE gd.hoc_vien_id = ? AND gd.trang_thai = 'dang_hoc'
+       WHERE gd.hoc_vien_id = ? AND gd.trang_thai = 'dang_hoc' AND l.trang_thai = 'dang_hoc'
        GROUP BY gd.id, l.so_buoi
      ) activeCourses`,
     [studentId],
@@ -96,17 +99,20 @@ studentRouter.get('/dashboard', async (request, response) => {
 
 studentRouter.get('/classes', async (request, response) => {
   const [rows] = await database.query(
-    `SELECT gd.id AS enrollmentId, gd.trang_thai AS enrollmentStatus,
-      l.id, l.ma_lop AS code, l.ten_lop AS name, l.ngay_khai_giang AS startDate,
-      l.so_buoi AS totalSessions, l.trang_thai AS status,
-      k.ten_khoa_hoc AS courseName, k.ngoai_ngu AS language, k.trinh_do AS level,
+    `SELECT gd.id AS enrollmentId, gd.trang_thai AS enrollmentStatus, gd.ngay_ghi_danh AS enrolledAt,
+      l.id, l.id AS classId, l.ma_lop AS code, l.ten_lop AS name, l.ngay_khai_giang AS startDate,
+      l.so_buoi AS totalSessions, l.trang_thai AS status, l.si_so_toi_da AS maxStudents,
+      (SELECT COUNT(*) FROM ghi_danh roster WHERE roster.lop_hoc_id = l.id
+        AND roster.trang_thai IN ('dang_hoc', 'hoan_thanh')) AS enrolled,
+      k.id AS courseId, k.ten_khoa_hoc AS courseName, k.ngoai_ngu AS language, k.trinh_do AS level,
+      k.mo_ta AS description,
       gv.ho_ten AS teacherName,
       COUNT(DISTINCT CASE WHEN bh.trang_thai = 'da_hoc' THEN bh.id END) AS completedSessions
-     FROM ghi_danh gd JOIN lop_hoc l ON l.id = gd.lop_hoc_id
+     FROM ghi_danh gd LEFT JOIN lop_hoc l ON l.id = gd.lop_hoc_id
      JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
      LEFT JOIN nguoi_dung gv ON gv.id = l.giao_vien_id
      LEFT JOIN buoi_hoc bh ON bh.lop_hoc_id = l.id
-     WHERE gd.hoc_vien_id = ? AND gd.trang_thai <> 'da_huy'
+     WHERE gd.hoc_vien_id = ?
      GROUP BY gd.id, l.id ORDER BY gd.id DESC`,
     [request.auth!.userId],
   )
@@ -287,6 +293,14 @@ studentRouter.post('/certificates/:id/download', async (request, response) => {
   const certificate = rows[0]
   if (!certificate) throw new HttpError(404, 'Không tìm thấy chứng chỉ đã cấp')
   if (!certificate.pdfPath) throw new HttpError(409, 'Tệp PDF của chứng chỉ chưa sẵn sàng')
+  let filename: string | undefined
+  try { filename = new URL(String(certificate.pdfPath)).pathname.match(/^\/uploads\/certificates\/([a-f0-9]{48}\.pdf)$/)?.[1] }
+  catch { /* Invalid stored URLs are handled as an unavailable file. */ }
+  if (!filename) throw new HttpError(409, 'Đường dẫn PDF chứng chỉ không hợp lệ; liên hệ trung tâm tạo lại tệp')
+  try {
+    const file = await stat(join(env.storageDir, 'certificates', filename))
+    if (!file.isFile() || file.size === 0) throw new Error('PDF unavailable')
+  } catch { throw new HttpError(409, 'Tệp PDF không còn tồn tại; liên hệ trung tâm tạo lại tệp chứng chỉ') }
   const [result] = await database.execute<ResultSetHeader>(
     'INSERT INTO luot_tai_chung_chi (chung_chi_id) VALUES (?)',
     [certificateId],

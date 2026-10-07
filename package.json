@@ -11,6 +11,7 @@
     "type-check": "tsc --noEmit",
     "test": "tsx --test src/**/*.test.ts",
     "test:integration": "tsx --test src/business-flow.test.ts",
+    "migrate:academic-finance": "tsx src/scripts/migrate-academic-finance.ts",
     "create-admin": "tsx src/scripts/create-admin.ts"
   },
   "dependencies": {

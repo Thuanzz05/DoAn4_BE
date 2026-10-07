@@ -9,6 +9,7 @@ type OperationOptions = {
   status?: number
   response?: Schema
   binary?: boolean
+  mimeTypes?: string[]
   upload?: boolean
 }
 
@@ -28,7 +29,7 @@ const query = (name: string, schema: Schema, required = false): Parameter => ({ 
 const paths: Record<string, Partial<Record<Method, Record<string, unknown>>>> = {}
 const roles: Record<string, string> = {
   'Người dùng': 'quan_tri', 'Khóa học': 'quan_tri', 'Phòng học': 'quan_tri',
-  'Lớp học': 'quan_tri', 'Ghi danh': 'quan_tri', 'Lịch học': 'quan_tri',
+  'Lớp học': 'quan_tri', 'Kỳ thi': 'quan_tri', 'Ghi danh': 'quan_tri', 'Lịch học': 'quan_tri',
   'Học phí': 'quan_tri', 'Chứng chỉ': 'quan_tri', 'Báo cáo': 'quan_tri',
   'Giáo viên': 'giao_vien', 'Học viên': 'hoc_vien',
 }
@@ -44,7 +45,7 @@ function add(method: Method, path: string, tag: string, summary: string, options
       description: status === 204 ? 'Đã xóa, không có nội dung trả về' : 'Thành công',
       ...(status === 204 ? {} : {
         content: options.binary
-          ? { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { schema: { type: 'string', format: 'binary' } } }
+          ? Object.fromEntries((options.mimeTypes ?? ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']).map((mime) => [mime, { schema: { type: 'string', format: 'binary' } }]))
           : { 'application/json': { schema: options.response ?? { $ref: '#/components/schemas/Success' } } },
       }),
     },
@@ -139,7 +140,8 @@ add('delete', '/courses/{id}', 'Khóa học', 'Xóa khóa chưa có dữ liệu 
 
 add('get', '/users', 'Người dùng', 'Danh sách người dùng', { parameters: [query('role', enumeration('quan_tri', 'giao_vien', 'hoc_vien'))] })
 add('post', '/users', 'Người dùng', 'Tạo giáo viên hoặc học viên', {
-  status: 201, body: object({ ...userFields, password, role: enumeration('giao_vien', 'hoc_vien') }, ['fullName', 'email', 'phone', 'password', 'role']),
+  status: 201, body: object({ ...userFields, password, role: enumeration('giao_vien', 'hoc_vien') }, ['fullName', 'email', 'phone', 'role']),
+  description: 'Bỏ trống password để sinh mật khẩu tạm. Gửi email sau khi tạo; nếu SMTP lỗi/chưa cấu hình, trả thông tin bàn giao và cảnh báo. Không trả mật khẩu khi email đã gửi thành công.',
 })
 add('patch', '/users/{id}', 'Người dùng', 'Cập nhật người dùng', { body: object(userFields) })
 add('patch', '/users/{id}/status', 'Người dùng', 'Khóa hoặc mở tài khoản', {
@@ -167,6 +169,14 @@ add('post', '/classes/{id}/complete', 'Lớp học', 'Kết thúc lớp', { desc
 add('post', '/classes/{id}/cancel', 'Lớp học', 'Hủy lớp', { description: 'Phải xử lý chuyển lớp hoặc hủy ghi danh liên quan trước.' })
 add('post', '/classes/{id}/generate-sessions', 'Lớp học', 'Sinh buổi theo lịch hàng tuần', { status: 201, description: 'Cần có giáo viên, lịch hàng tuần và chưa sinh buổi trước đó.' })
 add('get', '/classes/{id}/sessions', 'Lớp học', 'Danh sách buổi học của lớp')
+add('get', '/classes/{id}/academic', 'Lớp học', 'Hồ sơ học vụ: học viên, điểm danh còn thiếu và điểm toàn khóa')
+add('get', '/classes/{id}/academic/export', 'Lớp học', 'Xuất Excel học vụ lớp', { binary: true, parameters: [query('section', enumeration('all', 'attendance', 'grades'))] })
+const localDeadline = nullable({ type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2})?$', example: '2026-10-20T23:59', description: 'Giờ Việt Nam; không thêm Z.' })
+const examFields = { classId: id, name: { type: 'string', minLength: 1, maxLength: 100 }, examDate: nullable(date), deadline: localDeadline, reason: { type: 'string', minLength: 1, maxLength: 255 } }
+add('get', '/exams', 'Kỳ thi', 'Danh sách kỳ thi, hạn sửa và trạng thái khóa', { parameters: [query('classId', id)] })
+add('post', '/exams', 'Kỳ thi', 'Quản trị viên tạo kỳ thi và lưu lịch sử', { status: 201, body: object(examFields, ['classId', 'name', 'reason']) })
+add('patch', '/exams/{id}', 'Kỳ thi', 'Sửa thông tin hoặc gia hạn nhập điểm', { body: object(examFields, ['reason']), description: 'Bắt buộc lý do, lưu trước/sau/người sửa. Không đổi lớp, không xóa hạn đã đặt; hạn mới phải ở tương lai. Khóa khi lớp đã chốt chứng chỉ.' })
+add('get', '/exams/{id}/history', 'Kỳ thi', 'Lịch sử tạo, sửa và gia hạn kỳ thi')
 
 add('get', '/enrollments', 'Ghi danh', 'Danh sách ghi danh')
 add('post', '/enrollments', 'Ghi danh', 'Ghi danh khóa học và tự tạo hóa đơn', {
@@ -184,7 +194,7 @@ add('post', '/enrollments/import/preview', 'Ghi danh', 'Kiểm tra file Excel tr
 add('post', '/enrollments/import/confirm', 'Ghi danh', 'Xác nhận import học viên, ghi danh và hóa đơn', {
   status: 201,
   body: object({ courseId: id, classId: nullable(id), rows: { ...array(object({ fullName: userFields.fullName, email: userFields.email, phone, birthDate: nullable(date) }, ['fullName', 'email', 'phone'])), maxItems: 100 } }, ['courseId', 'rows']),
-  description: 'Tạo dữ liệu thật. Mật khẩu tạm được trả về một lần; backend kiểm tra lại toàn bộ các dòng.',
+  description: 'Tạo dữ liệu thật, kiểm tra lại toàn bộ dòng. Gửi thông tin đăng nhập cho tài khoản mới; chỉ trả mật khẩu bàn giao khi email chưa gửi được.',
 })
 
 const scheduleFields = { classId: id, roomId: id, dayOfWeek: { type: 'integer', minimum: 1, maximum: 7, example: 2, description: '1: Chủ nhật; 2: Thứ hai; …; 7: Thứ bảy.' }, startTime: time, endTime: { ...time, example: '19:30' } }
@@ -199,13 +209,14 @@ add('patch', '/sessions/{id}', 'Lịch học', 'Đổi buổi hoặc xếp lại
 add('post', '/sessions/{id}/cancel', 'Lịch học', 'Hủy buổi chưa bắt đầu')
 
 add('get', '/invoices', 'Học phí', 'Danh sách hóa đơn', {
-  parameters: [query('query', text()), query('status', enumeration('chua_thanh_toan', 'da_thanh_toan', 'qua_han', 'da_huy')), query('classId', id)],
+  parameters: [query('query', text()), query('status', enumeration('chua_thanh_toan', 'da_thanh_toan', 'qua_han', 'da_huy')), query('classId', id), query('from', date), query('to', date)],
 })
 add('post', '/invoices', 'Học phí', 'Lập hóa đơn khi chưa có hóa đơn còn hiệu lực', {
   status: 201, body: object({ enrollmentId: id, dueDate: date, amount: { type: 'integer', minimum: 1 } }, ['enrollmentId', 'dueDate']),
 })
 add('patch', '/invoices/{id}/payment', 'Học phí', 'Xác nhận đã thu học phí', { body: object({ method: enumeration('tien_mat', 'chuyen_khoan') }, ['method']) })
 add('patch', '/invoices/{id}/cancel', 'Học phí', 'Hủy hóa đơn chưa thanh toán', { body: object({ reason: text('Lập sai hóa đơn') }, ['reason']) })
+add('post', '/invoices/reminders', 'Học phí', 'Nhắc hóa đơn trong 3 ngày tới hoặc quá hạn', { body: object({ classId: id }), description: 'Mỗi hóa đơn/hạn thanh toán chỉ nhắc một lần ở mỗi giai đoạn. Bỏ qua bảo lưu/hủy và tài khoản khóa; lưu thông báo trước khi thử email.' })
 
 add('get', '/certificates/verify/{code}', 'Chứng chỉ', 'Xác thực công khai chứng chỉ', { public: true })
 add('get', '/certificates/candidates', 'Chứng chỉ', 'Danh sách hồ sơ và điều kiện chứng chỉ')
@@ -222,10 +233,15 @@ add('patch', '/certificates/{id}/details', 'Chứng chỉ', 'Đính chính thôn
 add('get', '/reports', 'Báo cáo', 'Báo cáo học phí và đào tạo', {
   parameters: [query('period', enumeration('month', 'quarter', 'year')), query('year', { type: 'integer', minimum: 2000, maximum: 2100, example: 2026 }), query('unit', { type: 'integer', minimum: 1, maximum: 12, description: 'Tháng 1–12 hoặc quý 1–4; bỏ qua khi period=year.' })],
 })
+add('get', '/certificates/{id}/corrections', 'Chứng chỉ', 'Lịch sử đính chính, người sửa và dữ liệu trước/sau')
+add('get', '/reports/export', 'Báo cáo', 'Xuất báo cáo đầy đủ Excel hoặc PDF', {
+  binary: true, mimeTypes: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/pdf'], parameters: [query('period', enumeration('month', 'quarter', 'year')), query('year', { type: 'integer', minimum: 2000, maximum: 2100 }), query('unit', { type: 'integer', minimum: 1, maximum: 12 }), query('format', enumeration('xlsx', 'pdf'))],
+  description: 'XLSX gồm 5 sheet; PDF gồm tổng quan, doanh thu, ngoại ngữ, khóa học và kết quả theo lớp.',
+})
 add('get', '/admin/dashboard', 'Báo cáo', 'Dashboard quản trị viên')
 
-add('get', '/notifications', 'Thông báo', 'Thông báo của tài khoản hiện tại', { parameters: [query('unreadOnly', { type: 'boolean', default: false })] })
-add('patch', '/notifications/read-all', 'Thông báo', 'Đánh dấu toàn bộ thông báo đã đọc')
+add('get', '/notifications', 'Thông báo', 'Thông báo của tài khoản hiện tại', { parameters: [query('unreadOnly', { type: 'boolean', default: false }), query('paginated', { type: 'boolean', default: false }), query('page', id), query('pageSize', { type: 'integer', minimum: 1, maximum: 100 })], description: 'paginated=true trả data.items và data.pagination (total, unread). Mặc định giữ danh sách 50 thông báo gần nhất.' })
+add('patch', '/notifications/read-all', 'Thông báo', 'Đánh dấu thông báo đã đọc', { body: object({ ids: { type: 'array', items: id, maxItems: 100 } }), description: 'Có ids: chỉ đọc thông báo của tài khoản trong danh sách. Bỏ ids: đọc toàn bộ.' })
 add('patch', '/notifications/{id}/read', 'Thông báo', 'Đánh dấu một thông báo đã đọc')
 add('post', '/notifications', 'Thông báo', 'Quản trị viên gửi thông báo', {
   status: 201, description: 'Vai trò quan_tri. Chọn đúng một đối tượng: userId hoặc role.',
@@ -242,11 +258,13 @@ add('put', '/teacher/sessions/{id}/attendance', 'Giáo viên', 'Lưu điểm dan
   description: 'Cần đúng giáo viên của buổi, đã đến giờ bắt đầu, buổi không hủy. Gửi đủ danh sách, không trùng học viên. Hồ sơ đã duyệt chứng chỉ không được thay đổi.',
 })
 add('get', '/teacher/classes/{id}/exams', 'Giáo viên', 'Danh sách kỳ thi của lớp')
+add('get', '/teacher/classes/{id}/academic', 'Giáo viên', 'Thống kê chuyên cần, thiếu điểm danh và điểm toàn khóa')
+add('get', '/teacher/classes/{id}/academic/export', 'Giáo viên', 'Xuất Excel thống kê lớp phụ trách', { binary: true, parameters: [query('section', enumeration('all', 'attendance', 'grades'))] })
 add('post', '/teacher/classes/{id}/exams', 'Giáo viên', 'Tạo kỳ thi', {
   status: 201,
   body: object({ name: text('Kiểm tra cuối khóa'), examDate: nullable(date), deadline: nullable({ type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2})?$', example: '2026-10-20T23:59', description: 'Giờ địa phương Việt Nam, không thêm Z hoặc múi giờ.' }) }, ['name']),
 })
-add('get', '/teacher/exams/{id}/results', 'Giáo viên', 'Bảng điểm và học viên đủ học phí')
+add('get', '/teacher/exams/{id}/results', 'Giáo viên', 'Bảng điểm toàn lớp và lý do chặn học viên chưa đủ học phí')
 const score: Schema = { type: 'number', nullable: true, minimum: 0, maximum: 10, example: 7.5 }
 add('put', '/teacher/exams/{id}/results', 'Giáo viên', 'Lưu điểm bốn kỹ năng', {
   body: object({ items: array(object({ enrollmentId: id, listening: score, speaking: score, reading: score, writing: score }, ['enrollmentId', 'listening', 'speaking', 'reading', 'writing'])) }, ['items']),
@@ -276,7 +294,7 @@ export const openApiDocument = {
   },
   servers: [{ url: '/api', description: 'Backend đang mở — cùng máy chủ với Swagger' }],
   security: [{ bearerAuth: [] }],
-  tags: ['Hệ thống', 'Đăng nhập', 'Khóa học', 'Người dùng', 'Phòng học', 'Lớp học', 'Ghi danh', 'Lịch học', 'Học phí', 'Chứng chỉ', 'Báo cáo', 'Thông báo', 'Giáo viên', 'Học viên', 'AI tư vấn'].map((name) => ({ name })),
+  tags: ['Hệ thống', 'Đăng nhập', 'Khóa học', 'Người dùng', 'Phòng học', 'Lớp học', 'Kỳ thi', 'Ghi danh', 'Lịch học', 'Học phí', 'Chứng chỉ', 'Báo cáo', 'Thông báo', 'Giáo viên', 'Học viên', 'AI tư vấn'].map((name) => ({ name })),
   paths,
   components: {
     securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'Dán data.token từ API đăng nhập; không thêm chữ Bearer.' } },

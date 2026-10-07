@@ -13,6 +13,8 @@ Backend Node.js + TypeScript + Express + MySQL cho hệ thống quản lý trung
 Nếu nâng cấp từ phiên bản cũ đã có dữ liệu, chạy một lần
 `database/migrations/20261003_toan_ven_chung_chi.sql` trong MySQL Workbench trước khi khởi động backend.
 Sau đó chạy một lần `database/migrations/20261007_chot_ho_so_chung_chi.sql` để chốt hồ sơ từ lúc duyệt.
+Chạy `npm run migrate:academic-finance` để thêm bảng lịch sử kỳ thi và bảng chống gửi trùng nhắc học phí.
+Lệnh này chỉ tạo hai bảng nếu chưa tồn tại, không sửa dữ liệu hiện có.
 
 Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/health`.
 
@@ -52,23 +54,31 @@ Swagger chỉ được mở ở môi trường không phải production, không 
 - `GET/POST/PATCH /api/enrollments`: ghi danh, xếp lớp và tự tạo hóa đơn.
 - `GET /api/enrollments/import/template`: tải file Excel mẫu để import học viên.
 - `POST /api/enrollments/import/preview?courseId=&classId=`: đọc file `.xlsx` và xem lỗi từng dòng.
-- `POST /api/enrollments/import/confirm`: tạo hàng loạt tài khoản, ghi danh và hóa đơn; mật khẩu tạm chỉ trả về một lần.
+- `POST /api/enrollments/import/confirm`: tạo hàng loạt tài khoản, ghi danh và hóa đơn; gửi thông tin đăng nhập qua email sau khi lưu thành công. Nếu không gửi được, trả mật khẩu tạm để quản trị viên bàn giao.
 - `GET/POST/PATCH/DELETE /api/schedules`: xếp lịch, kiểm tra trùng phòng/giáo viên.
 - `POST /api/classes/:id/generate-sessions`: sinh các buổi học từ lịch hàng tuần.
+- `GET /api/classes/:id/academic` và `/export?section=all|attendance|grades`: danh sách học viên, chuyên cần, điểm danh thiếu và điểm toàn khóa; xuất Excel cùng nguồn dữ liệu.
+- `GET/POST /api/exams`, `PATCH /api/exams/:id`: quản trị viên quản lý kỳ thi và hạn sửa điểm; bắt buộc lý do, chặn thay đổi sau khi chốt chứng chỉ.
+- `GET /api/exams/:id/history`: lịch sử thay đổi, người thực hiện, lý do và dữ liệu trước/sau.
 - `GET/POST/PATCH /api/invoices`: quản lý hóa đơn, thanh toán và hủy hóa đơn.
+- `POST /api/invoices/reminders`: quét nhắc học phí đến hạn/quá hạn, không gửi thông báo trùng cho cùng hóa đơn, hạn và giai đoạn.
 - `GET /api/certificates/candidates`: danh sách và điều kiện xét cấp chứng chỉ.
 - `POST /api/certificates/approve`: phê duyệt học viên đủ điều kiện.
 - `PATCH /api/certificates/:id/issue`: tự tạo PDF và phát hành chứng chỉ đã duyệt.
 - `PATCH /api/certificates/:id/details`: đính chính thông tin hồ sơ **chưa phát hành**, bắt buộc lý do; lưu dấu vết trước/sau, không đổi điều kiện học tập.
 - `POST /api/certificates/:id/reissue`: tạo lại PDF, giữ nguyên nội dung, mã xác thực và ngày cấp gốc.
+- `GET /api/certificates/:id/corrections`: lịch sử đính chính dành cho quản trị viên.
 - `GET /api/certificates/verify/:code`: tra cứu công khai mã xác thực chứng chỉ.
 - `GET /api/reports`: báo cáo doanh thu, công nợ và đào tạo theo kỳ.
+- `GET /api/reports/export?period=month|quarter|year&year=&unit=&format=xlsx|pdf`: xuất đầy đủ số liệu báo cáo theo tháng/quý/năm bất kỳ. Đạt/trượt xét học viên đã hoàn thành và đủ điểm tất cả kỳ thi; hồ sơ còn thiếu được ghi nhận riêng.
 - `GET /api/admin/dashboard`: số liệu tổng quan dành cho quản trị viên.
 - `GET/PATCH /api/notifications`: xem và đánh dấu thông báo đã đọc.
+- `GET /api/notifications?paginated=true&page=&pageSize=`: phân trang thông báo và tổng số chưa đọc; `PATCH /api/notifications/read-all` với `{ "ids": [...] }` chỉ đánh dấu các thông báo đã tải.
 - `POST /api/notifications`: quản trị viên gửi thông báo cho người dùng hoặc vai trò.
 - `GET /api/teacher/dashboard|classes|sessions`: dữ liệu giảng dạy của giáo viên đăng nhập.
 - `GET/PUT /api/teacher/sessions/:id/attendance`: xem và lưu điểm danh cả lớp.
 - `GET/POST /api/teacher/classes/:id/exams`: xem và tạo kỳ thi cho lớp phụ trách.
+- `GET /api/teacher/classes/:id/academic` và `/export?section=all|attendance|grades`: thống kê và Excel toàn khóa, chỉ cho lớp giáo viên phụ trách.
 - `GET/PUT /api/teacher/exams/:id/results`: xem và lưu điểm bốn kỹ năng; chỉ học viên đã hoàn tất học phí được dự thi.
 - `GET /api/student/dashboard|classes|sessions`: tổng quan và lịch học của học viên đăng nhập.
 - `GET /api/student/results|invoices|certificates`: kết quả, học phí và chứng chỉ cá nhân.
@@ -93,6 +103,8 @@ PDF chứng chỉ được lưu trong `STORAGE_DIR/certificates` và phục vụ
 - Gmail yêu cầu bật xác minh hai bước và tạo App Password, rồi điền `SMTP_USER`, `SMTP_PASSWORD`.
 - Tạo OAuth Web Client ID trong Google Cloud và điền `GOOGLE_CLIENT_ID`.
 - Khi chưa cấu hình SMTP ở môi trường development, API quên mật khẩu trả thêm `devCode` để kiểm thử.
+- Tạo tài khoản giáo viên/học viên gửi email thông tin đăng nhập sau khi lưu; nếu SMTP chưa cấu hình hoặc lỗi, dữ liệu vẫn được giữ và quản trị viên nhận thông tin bàn giao một lần.
+- Đặt `INVOICE_REMINDERS_ENABLED=true` để tự quét học phí lúc khởi động và mỗi giờ khi backend đang chạy. Nhắc một lần khi còn tối đa 3 ngày, một lần khi quá hạn; bỏ qua ghi danh đã hủy/bảo lưu và tài khoản bị khóa. Thông báo trong hệ thống hoạt động dù chưa cấu hình SMTP; email chỉ gửi khi SMTP sẵn sàng. Đổi hạn thanh toán bắt đầu chu kỳ nhắc mới.
 
 ## Kiểm tra và build
 
@@ -112,3 +124,4 @@ Remove-Item Env:RUN_BUSINESS_INTEGRATION
 ```
 
 Kiểm thử không ghi vào `doan4`, tự dọn database `doan4_test_<mã ngẫu nhiên>` và PDF tạm khi kết thúc.
+Hai luồng mới có kiểm thử MySQL riêng: đặt `RUN_ACADEMIC_INTEGRATION=1` khi chạy `npx tsx --test src/academic-flow.test.ts`, hoặc `RUN_FINANCE_INTEGRATION=1` khi chạy `npx tsx --test src/services/finance-flow.test.ts`. Chúng cũng tạo và dọn database tạm, không gửi email thật.

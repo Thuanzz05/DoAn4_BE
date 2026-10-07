@@ -60,20 +60,38 @@ overviewRouter.get('/admin/dashboard', requireAuth, requireRole('quan_tri'), asy
 
 overviewRouter.get('/notifications', requireAuth, async (request, response) => {
   const unreadOnly = request.query.unreadOnly === 'true'
+  const page = request.query.page === undefined ? 1 : positiveInt(request.query.page, 'Trang')
+  const pageSize = request.query.pageSize === undefined ? 20 : positiveInt(request.query.pageSize, 'Số thông báo mỗi trang')
+  if (pageSize > 100 || page > 100_000) throw new HttpError(400, 'Phân trang thông báo không hợp lệ')
+  const paginated = request.query.paginated === 'true'
   const [rows] = await database.query(
     `SELECT id, tieu_de AS title, noi_dung AS content, da_doc_luc AS readAt,
       ngay_tao AS createdAt FROM thong_bao
      WHERE nguoi_dung_id = ? AND (? = FALSE OR da_doc_luc IS NULL)
-     ORDER BY id DESC LIMIT 50`,
-    [request.auth!.userId, unreadOnly],
+     ORDER BY id DESC LIMIT ? OFFSET ?`,
+    [request.auth!.userId, unreadOnly, paginated ? pageSize : 50, paginated ? (page - 1) * pageSize : 0],
   )
-  response.json({ success: true, data: rows })
+  if (!paginated) { response.json({ success: true, data: rows }); return }
+  const [counts] = await database.query<SimpleRow[]>(
+    `SELECT COUNT(CASE WHEN ? = FALSE OR da_doc_luc IS NULL THEN 1 END) AS total,
+      COUNT(CASE WHEN da_doc_luc IS NULL THEN 1 END) AS unread FROM thong_bao WHERE nguoi_dung_id = ?`,
+    [unreadOnly, request.auth!.userId],
+  )
+  response.json({ success: true, data: { items: rows, pagination: { page, pageSize,
+    total: Number(counts[0].total), unread: Number(counts[0].unread) } } })
 })
 
 overviewRouter.patch('/notifications/read-all', requireAuth, async (request, response) => {
+  const hasIds = request.body?.ids !== undefined
+  if (hasIds && (!Array.isArray(request.body.ids) || request.body.ids.length > 100)) {
+    throw new HttpError(400, 'Danh sách thông báo không hợp lệ (tối đa 100)')
+  }
+  const ids: number[] = hasIds ? [...new Set<number>(request.body.ids.map((id: unknown) => positiveInt(id, 'Thông báo')))] : []
+  if (hasIds && ids.length === 0) { response.json({ success: true, data: { updated: 0 } }); return }
   const [result] = await database.execute<ResultSetHeader>(
-    'UPDATE thong_bao SET da_doc_luc = NOW() WHERE nguoi_dung_id = ? AND da_doc_luc IS NULL',
-    [request.auth!.userId],
+    `UPDATE thong_bao SET da_doc_luc = NOW() WHERE nguoi_dung_id = ? AND da_doc_luc IS NULL
+      ${hasIds ? `AND id IN (${ids.map(() => '?').join(',')})` : ''}`,
+    [request.auth!.userId, ...ids],
   )
   response.json({ success: true, data: { updated: result.affectedRows } })
 })

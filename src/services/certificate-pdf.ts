@@ -16,7 +16,7 @@ export type CertificatePdfData = {
   verificationUrl: string
 }
 
-function fontPath(): string {
+export function fontPath(): string {
   const candidates = [
     env.certificateFontPath,
     join(process.env.WINDIR ?? 'C:\\Windows', 'Fonts', 'arial.ttf'),

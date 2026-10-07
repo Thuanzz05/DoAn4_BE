@@ -8,7 +8,9 @@ import { env } from '../config/env'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { HttpError } from '../utils/http-error'
 import { createCertificatePdf } from '../services/certificate-pdf'
-import { getCertificateEligibilityReasons, getReportPeriod, isCertificateEligible, parseTuitionAmount, type CertificateEligibility } from '../utils/operations'
+import { getCertificateEligibilityReasons, isCertificateEligible, parseTuitionAmount, type CertificateEligibility } from '../utils/operations'
+import { createReportExcel, createReportPdf, getReportData } from '../services/reports'
+import { sendDueInvoiceReminders } from '../services/invoice-reminders'
 import { attendanceRateSql, attendanceStatsJoin } from '../utils/attendance'
 import { normalizeLocalDateTime } from '../utils/date-time'
 
@@ -63,7 +65,7 @@ function date(value: unknown, label: string): string {
 
 const invoiceSelect = `SELECT hd.id, hd.ma_hoa_don AS code, hd.ghi_danh_id AS enrollmentId,
   hv.ma_nguoi_dung AS studentCode, hv.ho_ten AS studentName,
-  k.ten_khoa_hoc AS courseName, l.id AS classId, l.ten_lop AS className,
+  k.ten_khoa_hoc AS courseName, l.id AS classId, l.ma_lop AS classCode, l.ten_lop AS className,
   hd.so_tien AS amount, hd.ngay_lap AS issuedAt, hd.han_thanh_toan AS dueDate,
   CASE WHEN hd.trang_thai = 'chua_thanh_toan' AND hd.han_thanh_toan < CURDATE()
     THEN 'qua_han' ELSE hd.trang_thai END AS status,
@@ -141,16 +143,26 @@ operationsRouter.get('/invoices', async (request, response) => {
   const query = typeof request.query.query === 'string' ? `%${request.query.query.trim()}%` : '%%'
   const status = typeof request.query.status === 'string' ? request.query.status : null
   const classId = request.query.classId === undefined ? null : positiveInt(request.query.classId, 'Lớp học')
+  const from = request.query.from === undefined || request.query.from === '' ? null : date(request.query.from, 'Ngày bắt đầu')
+  const to = request.query.to === undefined || request.query.to === '' ? null : date(request.query.to, 'Ngày kết thúc')
+  if (from && to && to < from) throw new HttpError(400, 'Ngày kết thúc phải từ ngày bắt đầu trở đi')
   const validStatuses = ['chua_thanh_toan', 'da_thanh_toan', 'qua_han', 'da_huy']
   if (status && !validStatuses.includes(status)) throw new HttpError(400, 'Trạng thái hóa đơn không hợp lệ')
   const [rows] = await database.query(
     `SELECT * FROM (${invoiceSelect}) invoices
      WHERE (code LIKE ? OR studentCode LIKE ? OR studentName LIKE ? OR className LIKE ?)
        AND (? IS NULL OR status = ?) AND (? IS NULL OR classId = ?)
+       AND (? IS NULL OR issuedAt >= ?) AND (? IS NULL OR issuedAt <= ?)
      ORDER BY id DESC`,
-    [query, query, query, query, status, status, classId, classId],
+    [query, query, query, query, status, status, classId, classId, from, from, to, to],
   )
   response.json({ success: true, data: rows })
+})
+
+operationsRouter.post('/invoices/reminders', async (request, response) => {
+  const classId = request.body?.classId === undefined || request.body?.classId === null
+    ? null : positiveInt(request.body.classId, 'Lớp học')
+  response.json({ success: true, data: await sendDueInvoiceReminders(classId) })
 })
 
 operationsRouter.post('/invoices', async (request, response) => {
@@ -440,64 +452,33 @@ operationsRouter.patch('/certificates/:id/details', async (request, response) =>
   } catch (error) { await connection.rollback(); throw error } finally { connection.release() }
 })
 
-operationsRouter.get('/reports', async (request, response) => {
-  const now = new Date()
-  const periodName = request.query.period ?? 'month'
-  const year = request.query.year ?? now.getFullYear()
-  const unit = request.query.unit ?? (periodName === 'quarter' ? Math.floor(now.getMonth() / 3) + 1 : now.getMonth() + 1)
-  const period = getReportPeriod(periodName, year, unit)
-  if (!period) throw new HttpError(400, 'Kỳ báo cáo không hợp lệ')
-  const params = [period.start, period.end]
-  const [[metrics], [revenueByMonth], [languageShare], [coursePerformance]] = await Promise.all([
-    database.query<SimpleRow[]>(
-      `SELECT
-        COALESCE(SUM(CASE WHEN trang_thai = 'da_thanh_toan' AND ngay_thanh_toan >= ? AND ngay_thanh_toan < ? THEN so_tien ELSE 0 END), 0) AS revenue,
-        COALESCE(SUM(CASE WHEN trang_thai = 'chua_thanh_toan' AND ngay_lap >= ? AND ngay_lap < ? THEN so_tien ELSE 0 END), 0) AS debt
-       FROM hoa_don`,
-      [...params, ...params],
-    ),
-    database.query(
-      `SELECT DATE_FORMAT(ngay_thanh_toan, '%Y-%m') AS month, SUM(so_tien) AS revenue
-       FROM hoa_don WHERE trang_thai = 'da_thanh_toan'
-         AND ngay_thanh_toan >= DATE_SUB(?, INTERVAL 6 MONTH) AND ngay_thanh_toan < ?
-       GROUP BY month ORDER BY month`,
-      [period.end, period.end],
-    ),
-    database.query(
-      `SELECT k.ngoai_ngu AS language, COUNT(DISTINCT gd.hoc_vien_id) AS students
-       FROM ghi_danh gd JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
-       WHERE gd.ngay_ghi_danh >= ? AND gd.ngay_ghi_danh < ? AND gd.trang_thai <> 'da_huy'
-       GROUP BY k.ngoai_ngu ORDER BY students DESC`,
-      params,
-    ),
-    database.query(
-      `SELECT k.id, k.ten_khoa_hoc AS courseName,
-        (SELECT COUNT(*) FROM lop_hoc l WHERE l.khoa_hoc_id = k.id) AS classes,
-        (SELECT COUNT(DISTINCT gd.hoc_vien_id) FROM ghi_danh gd
-          WHERE gd.khoa_hoc_id = k.id AND gd.ngay_ghi_danh >= ? AND gd.ngay_ghi_danh < ?
-            AND gd.trang_thai <> 'da_huy') AS students,
-        (SELECT ROUND(100 * SUM(gd.trang_thai = 'hoan_thanh') / NULLIF(COUNT(*), 0), 0)
-          FROM ghi_danh gd WHERE gd.khoa_hoc_id = k.id
-            AND gd.ngay_ghi_danh >= ? AND gd.ngay_ghi_danh < ? AND gd.trang_thai <> 'da_huy') AS completion,
-        (SELECT COALESCE(SUM(hd.so_tien), 0) FROM hoa_don hd
-          JOIN ghi_danh gd ON gd.id = hd.ghi_danh_id
-          WHERE gd.khoa_hoc_id = k.id AND hd.trang_thai = 'da_thanh_toan'
-            AND hd.ngay_thanh_toan >= ? AND hd.ngay_thanh_toan < ?) AS revenue
-       FROM khoa_hoc k ORDER BY revenue DESC`,
-      [...params, ...params, ...params],
-    ),
-  ])
-  const [counts] = await database.query<SimpleRow[]>(
-    `SELECT
-      (SELECT COUNT(DISTINCT gd.hoc_vien_id) FROM ghi_danh gd
-        WHERE gd.ngay_ghi_danh >= ? AND gd.ngay_ghi_danh < ? AND gd.trang_thai <> 'da_huy') AS students,
-      (SELECT COUNT(*) FROM lop_hoc l WHERE l.trang_thai = 'dang_hoc') AS activeClasses,
-      (SELECT COUNT(*) FROM chung_chi cc WHERE cc.trang_thai = 'da_cap'
-        AND cc.ngay_cap >= ? AND cc.ngay_cap < ?) AS certificates`,
-    [...params, ...params],
+operationsRouter.get('/certificates/:id/corrections', async (request, response) => {
+  const id = positiveInt(request.params.id, 'Chứng chỉ')
+  const [rows] = await database.query<SimpleRow[]>(
+    "SELECT JSON_EXTRACT(ho_so_luc_duyet, '$.corrections') AS corrections FROM chung_chi WHERE id = ?", [id],
   )
-  response.json({
-    success: true,
-    data: { period, metrics: { ...metrics[0], ...counts[0] }, revenueByMonth, languageShare, coursePerformance },
-  })
+  if (!rows[0]) throw new HttpError(404, 'Không tìm thấy chứng chỉ')
+  const stored = rows[0].corrections
+  const corrections = (typeof stored === 'string' ? JSON.parse(stored) : stored) as Array<Record<string, unknown>> | null
+  const items = Array.isArray(corrections) ? corrections : []
+  const ids = [...new Set(items.map((item) => Number(item.userId)).filter((userId) => Number.isInteger(userId) && userId > 0))]
+  const [users] = ids.length ? await database.query<SimpleRow[]>(
+    `SELECT id, ho_ten AS fullName FROM nguoi_dung WHERE id IN (${ids.map(() => '?').join(',')})`, ids,
+  ) : [[]]
+  response.json({ success: true, data: items.map((item) => ({ ...item,
+    adminName: users.find((user) => Number(user.id) === Number(item.userId))?.fullName ?? null })) })
+})
+
+operationsRouter.get('/reports', async (request, response) => {
+  response.json({ success: true, data: await getReportData(request.query.period, request.query.year, request.query.unit) })
+})
+
+operationsRouter.get('/reports/export', async (request, response) => {
+  const format = request.query.format
+  if (format !== 'xlsx' && format !== 'pdf') throw new HttpError(400, 'Định dạng xuất phải là xlsx hoặc pdf')
+  const data = await getReportData(request.query.period, request.query.year, request.query.unit)
+  const output = format === 'xlsx' ? await createReportExcel(data) : await createReportPdf(data)
+  response.setHeader('Content-Type', format === 'xlsx' ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/pdf')
+  response.setHeader('Content-Disposition', `attachment; filename="bao-cao-${data.period.start}.${format}"`)
+  response.send(output)
 })

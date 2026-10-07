@@ -145,6 +145,20 @@ CREATE TABLE IF NOT EXISTS ky_thi (
   CONSTRAINT fk_ky_thi_lop FOREIGN KEY (lop_hoc_id) REFERENCES lop_hoc(id)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS lich_su_ky_thi (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  ky_thi_id BIGINT UNSIGNED NOT NULL,
+  nguoi_thay_doi_id BIGINT UNSIGNED NOT NULL,
+  hanh_dong ENUM('tao', 'cap_nhat', 'gia_han') NOT NULL,
+  ly_do VARCHAR(255) NOT NULL,
+  du_lieu_truoc JSON NULL,
+  du_lieu_sau JSON NOT NULL,
+  ngay_thay_doi DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_lich_su_ky_thi (ky_thi_id, ngay_thay_doi),
+  CONSTRAINT fk_lich_su_ky_thi FOREIGN KEY (ky_thi_id) REFERENCES ky_thi(id),
+  CONSTRAINT fk_lich_su_ky_thi_nguoi_dung FOREIGN KEY (nguoi_thay_doi_id) REFERENCES nguoi_dung(id)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS ket_qua_thi (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   ky_thi_id BIGINT UNSIGNED NOT NULL,
@@ -180,6 +194,16 @@ CREATE TABLE IF NOT EXISTS hoa_don (
   CONSTRAINT fk_hoa_don_ghi_danh FOREIGN KEY (ghi_danh_id) REFERENCES ghi_danh(id),
   CONSTRAINT chk_hoa_don_so_tien CHECK (so_tien > 0),
   CONSTRAINT chk_hoa_don_han CHECK (han_thanh_toan >= ngay_lap)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS nhac_hoc_phi (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  hoa_don_id BIGINT UNSIGNED NOT NULL,
+  han_thanh_toan DATE NOT NULL,
+  loai ENUM('sap_den_han', 'qua_han') NOT NULL,
+  ngay_tao DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_nhac_hoc_phi (hoa_don_id, han_thanh_toan, loai),
+  CONSTRAINT fk_nhac_hoc_phi_hoa_don FOREIGN KEY (hoa_don_id) REFERENCES hoa_don(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- Chưa có bản ghi: chờ xét. Đã duyệt: chưa sinh PDF. Đã cấp: có PDF.

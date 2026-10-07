@@ -7,6 +7,8 @@ import { isValidDraftScore } from '../utils/grades'
 import { attendanceCountColumns, attendanceRateSql, attendanceStatsJoin } from '../utils/attendance'
 import { HttpError } from '../utils/http-error'
 import { canMarkAttendance } from '../utils/schedule'
+import { academicId, examDetails } from '../utils/academic'
+import { classAcademicWorkbook, loadClassAcademic } from '../services/class-academic'
 
 type SimpleRow = RowDataPacket & Record<string, string | number | null>
 type AttendanceStatus = 'co_mat' | 'di_muon' | 'vang'
@@ -28,13 +30,6 @@ function optionalDate(value: unknown, label: string): string | null {
     throw new HttpError(400, `${label} phải có định dạng YYYY-MM-DD`)
   }
   return value
-}
-
-function optionalDateTime(value: unknown, label: string): string | null {
-  if (value === undefined || value === null || value === '') return null
-  const normalized = typeof value === 'string' ? normalizeLocalDateTime(value) : null
-  if (!normalized) throw new HttpError(400, `${label} không hợp lệ`)
-  return normalized
 }
 
 async function ensureOwnedClass(teacherId: number, classId: number, connection: PoolConnection | typeof database = database): Promise<void> {
@@ -242,15 +237,24 @@ teacherRouter.get('/classes/:id/exams', async (request, response) => {
   response.json({ success: true, data: rows })
 })
 
+teacherRouter.get('/classes/:id/academic', async (request, response) => {
+  const classId = academicId(request.params.id, 'Lớp học')
+  response.json({ success: true, data: await loadClassAcademic(classId, request.auth!.userId) })
+})
+
+teacherRouter.get('/classes/:id/academic/export', async (request, response) => {
+  const classId = academicId(request.params.id, 'Lớp học')
+  const section = request.query.section === undefined ? 'all' : String(request.query.section)
+  const data = await loadClassAcademic(classId, request.auth!.userId)
+  const buffer = await classAcademicWorkbook(data, section)
+  response.set({ 'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'Content-Disposition': `attachment; filename="hoc-vu-lop-${classId}-${section}.xlsx"` })
+  response.send(buffer)
+})
+
 teacherRouter.post('/classes/:id/exams', async (request, response) => {
   const classId = positiveInt(request.params.id, 'Lớp học')
-  if (typeof request.body.name !== 'string' || !request.body.name.trim()) throw new HttpError(400, 'Tên kỳ thi là bắt buộc')
-  if (request.body.name.trim().length > 100) throw new HttpError(400, 'Tên kỳ thi tối đa 100 ký tự')
-  const examDate = optionalDate(request.body.examDate, 'Ngày thi')
-  const deadline = optionalDateTime(request.body.deadline, 'Hạn sửa điểm')
-  if (examDate && deadline && deadline < `${examDate} 00:00:00`) {
-    throw new HttpError(400, 'Hạn sửa điểm phải từ ngày thi trở đi')
-  }
+  const { name, examDate, deadline } = examDetails(request.body)
   const connection = await database.getConnection()
   try {
     await connection.beginTransaction()
@@ -266,10 +270,14 @@ teacherRouter.post('/classes/:id/exams', async (request, response) => {
     }
     const [result] = await connection.execute<ResultSetHeader>(
       'INSERT INTO ky_thi (lop_hoc_id, ten_ky_thi, ngay_thi, han_sua_diem) VALUES (?, ?, ?, ?)',
-      [classId, request.body.name.trim(), examDate, deadline],
+      [classId, name, examDate, deadline],
+    )
+    await connection.execute(
+      'INSERT INTO lich_su_ky_thi (ky_thi_id, nguoi_thay_doi_id, hanh_dong, ly_do, du_lieu_truoc, du_lieu_sau) VALUES (?, ?, ?, ?, NULL, ?)',
+      [result.insertId, request.auth!.userId, 'tao', 'Giáo viên tạo kỳ thi', JSON.stringify({ classId, name, examDate, deadline })],
     )
     await connection.commit()
-    response.status(201).json({ success: true, data: { id: result.insertId, classId, name: request.body.name.trim(), examDate, deadline } })
+    response.status(201).json({ success: true, data: { id: result.insertId, classId, name, examDate, deadline } })
   } catch (error) {
     await connection.rollback()
     throw error
@@ -281,24 +289,25 @@ teacherRouter.post('/classes/:id/exams', async (request, response) => {
 teacherRouter.get('/exams/:id/results', async (request, response) => {
   const examId = positiveInt(request.params.id, 'Kỳ thi')
   const exam = await ownedExam(request.auth!.userId, examId)
-  const [rows] = await database.query(
+  const [rows] = await database.query<SimpleRow[]>(
     `SELECT gd.id AS enrollmentId, hv.ma_nguoi_dung AS studentCode, hv.ho_ten AS studentName,
       kq.nghe AS listening, kq.noi AS speaking, kq.doc AS reading, kq.viet AS writing,
       cc.id AS certificateId,
+      EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
+        AND NOT EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan') AS eligible,
       CASE WHEN kq.nghe IS NULL OR kq.noi IS NULL OR kq.doc IS NULL OR kq.viet IS NULL THEN NULL
         ELSE ROUND((kq.nghe + kq.noi + kq.doc + kq.viet) / 4, 2) END AS average
      FROM ghi_danh gd JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
      LEFT JOIN ket_qua_thi kq ON kq.ghi_danh_id = gd.id AND kq.ky_thi_id = ?
      LEFT JOIN chung_chi cc ON cc.ghi_danh_id = gd.id
      WHERE gd.lop_hoc_id = ? AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')
-       AND EXISTS (SELECT 1 FROM hoa_don hd
-         WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
-       AND NOT EXISTS (SELECT 1 FROM hoa_don hd
-         WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan')
      ORDER BY hv.ho_ten`,
     [examId, exam.classId],
   )
-  response.json({ success: true, data: { exam, students: rows } })
+  response.json({ success: true, data: { exam, students: rows.map((row) => ({ ...row,
+    eligible: Boolean(Number(row.eligible)), paid: Boolean(Number(row.eligible)),
+    eligibilityReason: Number(row.eligible) ? null : 'Chưa hoàn tất học phí',
+  })) } })
 })
 
 teacherRouter.put('/exams/:id/results', async (request, response) => {

@@ -1,11 +1,17 @@
 import { app } from './app'
 import { checkDatabase, database } from './config/database'
 import { env } from './config/env'
+import { startInvoiceReminderJob } from './services/invoice-reminders'
 
 let server: ReturnType<typeof app.listen>
+let stopInvoiceReminders: (() => void) | undefined
 
 async function start(): Promise<void> {
   await checkDatabase()
+  if (process.env.INVOICE_REMINDERS_ENABLED === 'true') {
+    await database.query('SELECT id FROM nhac_hoc_phi LIMIT 1')
+    stopInvoiceReminders = startInvoiceReminderJob()
+  }
   server = app.listen(env.port, () => {
     console.log(`Server đang chạy tại http://localhost:${env.port}`)
     console.log(`MySQL database: ${env.dbName}`)
@@ -15,6 +21,7 @@ async function start(): Promise<void> {
 
 function shutdown(signal: string): void {
   console.log(`\nĐã nhận ${signal}. Đang dừng server...`)
+  stopInvoiceReminders?.()
 
   if (!server) {
     process.exit(0)

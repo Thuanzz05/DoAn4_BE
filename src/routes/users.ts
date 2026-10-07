@@ -5,7 +5,7 @@ import type { ResultSetHeader, RowDataPacket } from 'mysql2'
 import { database } from '../config/database'
 import { env } from '../config/env'
 import { requireAuth, requireRole } from '../middlewares/auth'
-import { sendTemporaryPassword } from '../services/mailer'
+import { deliverAccountInformation, sendTemporaryPassword } from '../services/mailer'
 import { generateTemporaryPassword, isValidBirthDate } from '../utils/account'
 import { HttpError } from '../utils/http-error'
 
@@ -34,7 +34,9 @@ const selectUsers = `SELECT n.id, n.ma_nguoi_dung AS code, n.ho_ten AS fullName,
   n.ngon_ngu_giang_day AS teachingLanguage, n.chuyen_mon AS specialty,
   n.ngay_tao AS createdAt,
   COUNT(DISTINCT CASE WHEN l.trang_thai IN ('sap_khai_giang', 'dang_hoc') THEN l.id END) AS activeClasses
-  FROM nguoi_dung n LEFT JOIN lop_hoc l ON l.giao_vien_id = n.id`
+  FROM nguoi_dung n LEFT JOIN lop_hoc l ON l.giao_vien_id = n.id
+    OR EXISTS (SELECT 1 FROM buoi_hoc bh WHERE bh.lop_hoc_id = l.id AND bh.giao_vien_id = n.id
+      AND bh.trang_thai = 'da_len_lich' AND bh.bat_dau > NOW())`
 
 function text(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new HttpError(400, `${label} là bắt buộc`)
@@ -74,7 +76,8 @@ usersRouter.post('/', async (request, response) => {
   const fullName = text(request.body.fullName, 'Họ tên')
   const email = text(request.body.email, 'Email').toLowerCase()
   const phone = text(request.body.phone, 'Số điện thoại').replace(/\s/g, '')
-  const password = text(request.body.password, 'Mật khẩu')
+  const password = request.body.password === undefined || request.body.password === ''
+    ? generateTemporaryPassword() : text(request.body.password, 'Mật khẩu')
   const role = request.body.role as 'giao_vien' | 'hoc_vien'
   if (!['giao_vien', 'hoc_vien'].includes(role)) throw new HttpError(400, 'Chỉ được tạo giáo viên hoặc học viên')
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Email không hợp lệ')
@@ -96,7 +99,8 @@ usersRouter.post('/', async (request, response) => {
       ],
     )
     const [rows] = await database.query<UserRow[]>(`${selectUsers} WHERE n.id = ? GROUP BY n.id`, [result.insertId])
-    response.status(201).json({ success: true, data: rows[0] })
+    const delivery = await deliverAccountInformation(email, fullName, password, role)
+    response.status(201).json({ success: true, data: { ...rows[0], ...delivery } })
   } catch (error) {
     if ((error as { code?: string }).code === 'ER_DUP_ENTRY') throw new HttpError(409, 'Email hoặc số điện thoại đã được sử dụng')
     throw error

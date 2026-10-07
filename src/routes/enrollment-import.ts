@@ -9,6 +9,8 @@ import { validateImportedStudents, normalizeHeader, type ImportedStudentRow } fr
 import { HttpError } from '../utils/http-error'
 import { ensureEnrollmentClass } from '../utils/enrollment'
 import { parseTuitionAmount } from '../utils/operations'
+import { generateTemporaryPassword } from '../utils/account'
+import { deliverAccountInformation } from '../services/mailer'
 
 type SimpleRow = RowDataPacket & Record<string, string | number | null>
 type QueryConnection = PoolConnection | typeof database
@@ -167,10 +169,11 @@ enrollmentImportRouter.post('/confirm', async (request, response) => {
   let rows = validateImportedStudents(request.body.rows)
   if (rows.some((row) => row.errors.length)) throw new HttpError(400, 'Danh sách học viên còn dữ liệu không hợp lệ')
   const accounts = await Promise.all(rows.map(async (row) => {
-    const temporaryPassword = `Hv1!${randomUUID().replaceAll('-', '').slice(0, 10)}`
+    const temporaryPassword = generateTemporaryPassword()
     return { ...row, temporaryPassword, passwordHash: await bcrypt.hash(temporaryPassword, 12) }
   }))
   const connection = await database.getConnection()
+  let released = false
   try {
     await connection.beginTransaction()
     rows = await addDatabaseErrors(rows, connection)
@@ -204,12 +207,18 @@ enrollmentImportRouter.post('/confirm', async (request, response) => {
       })
     }
     await connection.commit()
-    response.status(201).json({ success: true, data: { created: created.length, accounts: created } })
+    connection.release()
+    released = true
+    const delivered = await Promise.all(created.map(async ({ temporaryPassword, ...account }, index) => ({
+      ...account,
+      ...await deliverAccountInformation(account.email, accounts[index].fullName, temporaryPassword, 'hoc_vien'),
+    })))
+    response.status(201).json({ success: true, data: { created: delivered.length, accounts: delivered } })
   } catch (error) {
-    await connection.rollback()
+    if (!released) await connection.rollback()
     if ((error as { code?: string }).code === 'ER_DUP_ENTRY') throw new HttpError(409, 'Dữ liệu bị trùng, vui lòng xem trước lại file')
     throw error
   } finally {
-    connection.release()
+    if (!released) connection.release()
   }
 })

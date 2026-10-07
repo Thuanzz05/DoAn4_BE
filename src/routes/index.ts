@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { checkDatabase } from '../config/database'
 import { aiRouter } from './ai'
 import { academicRouter } from './academic'
+import { adminAcademicRouter } from './admin-academic'
 import { authRouter } from './auth'
 import { coursesRouter } from './courses'
 import { enrollmentImportRouter } from './enrollment-import'
@@ -27,6 +28,7 @@ apiRouter.use('/courses', coursesRouter)
 apiRouter.use('/users', usersRouter)
 apiRouter.use('/enrollments/import', enrollmentImportRouter)
 apiRouter.use(academicRouter)
+apiRouter.use(adminAcademicRouter)
 apiRouter.use(operationsRouter)
 apiRouter.use(overviewRouter)
 apiRouter.use('/teacher', teacherRouter)
