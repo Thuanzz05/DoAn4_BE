@@ -12,8 +12,21 @@ Backend Node.js + TypeScript + Express + MySQL cho hệ thống quản lý trung
 
 Nếu nâng cấp từ phiên bản cũ đã có dữ liệu, chạy một lần
 `database/migrations/20261003_toan_ven_chung_chi.sql` trong MySQL Workbench trước khi khởi động backend.
+Sau đó chạy một lần `database/migrations/20261007_chot_ho_so_chung_chi.sql` để chốt hồ sơ từ lúc duyệt.
 
 Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/health`.
+
+## Thử API bằng Swagger
+
+Chạy `npm run dev`, mở `http://localhost:3000/api-docs/`.
+
+1. Chọn `POST /auth/login`, bấm **Try it out**, nhập `account` (email/mã người dùng) và `password`, rồi **Execute**.
+2. Sao chép `data.token` từ kết quả, bấm **Authorize** và dán JWT, không thêm chữ `Bearer`.
+3. Thử `GET /auth/me` rồi chọn các API tương ứng vai trò quản trị viên, giáo viên hoặc học viên.
+
+Các API tạo/sửa/xóa và gửi email tác động dữ liệu thật; ID ví dụ cần thay bằng ID từ API danh sách.
+OpenAPI JSON: `http://localhost:3000/api-docs/openapi.json`.
+Swagger chỉ được mở ở môi trường không phải production, không lưu JWT sau khi tải lại trang.
 
 ## API đã có
 
@@ -46,6 +59,8 @@ Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/heal
 - `GET /api/certificates/candidates`: danh sách và điều kiện xét cấp chứng chỉ.
 - `POST /api/certificates/approve`: phê duyệt học viên đủ điều kiện.
 - `PATCH /api/certificates/:id/issue`: tự tạo PDF và phát hành chứng chỉ đã duyệt.
+- `PATCH /api/certificates/:id/details`: đính chính thông tin hồ sơ **chưa phát hành**, bắt buộc lý do; lưu dấu vết trước/sau, không đổi điều kiện học tập.
+- `POST /api/certificates/:id/reissue`: tạo lại PDF, giữ nguyên nội dung, mã xác thực và ngày cấp gốc.
 - `GET /api/certificates/verify/:code`: tra cứu công khai mã xác thực chứng chỉ.
 - `GET /api/reports`: báo cáo doanh thu, công nợ và đào tạo theo kỳ.
 - `GET /api/admin/dashboard`: số liệu tổng quan dành cho quản trị viên.
@@ -65,6 +80,14 @@ API cần đăng nhập sử dụng header `Authorization: Bearer <JWT>`.
 
 PDF chứng chỉ được lưu trong `STORAGE_DIR/certificates` và phục vụ qua `PUBLIC_URL`. Khi triển khai trên Linux, cấu hình `CERTIFICATE_FONT_PATH` tới một font `.ttf` hỗ trợ tiếng Việt.
 
+## Chính sách nghiệp vụ
+
+- Ghi danh học trọn khóa; xếp/chuyển lớp, bảo lưu hoặc hủy chỉ trước khi lớp bắt đầu học và chưa có lịch sử. Bảo lưu giải phóng chỗ, tiếp tục bằng một lớp chưa bắt đầu của cùng khóa.
+- Buổi hủy không tính vào chuyên cần; học bù xếp lại chính buổi đã hủy. Chuyên cần lấy số buổi thực tế đã đến giờ làm mẫu số, không lấy số bản ghi điểm danh. Thiếu điểm danh thì chưa đủ điều kiện chứng chỉ.
+- Bốn kỹ năng chấm 0–10; `null` là chưa nhập, `0` là điểm thật. Cho lưu bản nháp, chỉ kỳ thi đủ bốn điểm mới hoàn thành. Tất cả kỳ thi có trọng số bằng nhau; chuyên cần 80% là điều kiện chứng chỉ, không phải điều kiện dự thi.
+- Thu trọn học phí bằng tiền mặt/chuyển khoản; chưa hỗ trợ miễn phí, trả góp hay hoàn tiền. Hóa đơn lập lại giữ số tiền đã chốt lúc ghi danh, không phụ thuộc học phí khóa được sửa sau đó.
+- Duyệt chứng chỉ chốt tên/mã/khóa/lớp, điểm, chuyên cần và học phí; khóa thêm kỳ thi và sửa dữ liệu đã chốt. Đính chính thông tin chỉ trước phát hành; chứng chỉ đã cấp không sửa trực tiếp. Cấp lại là tạo lại PDF cùng thông tin, không phải đính chính hoặc cấp chứng chỉ mới.
+
 ## Gmail và Google login
 
 - Gmail yêu cầu bật xác minh hai bước và tạo App Password, rồi điền `SMTP_USER`, `SMTP_PASSWORD`.
@@ -79,3 +102,13 @@ npm test
 npm run build
 npm start
 ```
+
+Kiểm thử luồng API đầy đủ trên **database tạm riêng** (cần quyền CREATE/DROP DATABASE của tài khoản MySQL):
+
+```powershell
+$env:RUN_BUSINESS_INTEGRATION='1'
+npm run test:integration
+Remove-Item Env:RUN_BUSINESS_INTEGRATION
+```
+
+Kiểm thử không ghi vào `doan4`, tự dọn database `doan4_test_<mã ngẫu nhiên>` và PDF tạm khi kết thúc.

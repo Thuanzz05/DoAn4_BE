@@ -9,6 +9,7 @@ async function start(): Promise<void> {
   server = app.listen(env.port, () => {
     console.log(`Server đang chạy tại http://localhost:${env.port}`)
     console.log(`MySQL database: ${env.dbName}`)
+    if (env.nodeEnv !== 'production') console.log(`Swagger: http://localhost:${env.port}/api-docs/`)
   })
 }
 

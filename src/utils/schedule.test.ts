@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { canChangeClassPlan, canMarkAttendance, generateSessionDates, roomCanHostClass, shouldSyncTeacherAssignment } from './schedule'
+import { canCancelSession, canChangeClassPlan, canEditSession, canMarkAttendance, generateSessionDates, roomCanHostClass, shouldSyncTeacherAssignment } from './schedule'
 
 test('sinh đủ buổi theo lịch thứ hai và thứ tư', () => {
   const sessions = generateSessionDates('2026-09-28', 3, [
@@ -12,6 +12,8 @@ test('sinh đủ buổi theo lịch thứ hai và thứ tư', () => {
     '2026-09-30 18:00:00',
     '2026-10-05 18:00:00',
   ])
+  assert.deepEqual(generateSessionDates('2026-02-30', 3, [{ dayOfWeek: 2, startTime: '18:00:00', endTime: '19:30:00', roomId: 1 }]), [])
+  assert.deepEqual(generateSessionDates('2026-10-11', 1, [{ dayOfWeek: 1, startTime: '08:00:00', endTime: '09:30:00', roomId: 1 }]).map((item) => item.startsAt), ['2026-10-11 08:00:00'])
 })
 
 test('phòng học phải đủ sức chứa tối đa của lớp', () => {
@@ -24,6 +26,15 @@ test('chỉ điểm danh buổi đã bắt đầu và chưa bị hủy', () => {
   assert.equal(canMarkAttendance('da_hoc', true), true)
   assert.equal(canMarkAttendance('da_len_lich', false), false)
   assert.equal(canMarkAttendance('da_huy', true), false)
+})
+
+test('chỉ sửa hoặc hủy buổi học phù hợp', () => {
+  assert.equal(canEditSession('da_len_lich', false), true)
+  assert.equal(canEditSession('da_len_lich', true), false)
+  assert.equal(canEditSession('da_huy', true), true)
+  assert.equal(canEditSession('da_hoc', true), false)
+  assert.equal(canCancelSession('da_len_lich', false), true)
+  assert.equal(canCancelSession('da_huy', false), false)
 })
 
 test('đổi giáo viên phải đồng bộ các buổi học đã sinh', () => {

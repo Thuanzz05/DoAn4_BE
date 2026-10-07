@@ -4,6 +4,8 @@ import { database } from '../config/database'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { HttpError } from '../utils/http-error'
 import { getCertificateEligibilityReasons, isCertificateEligible } from '../utils/operations'
+import { attendanceCountColumns, attendanceRateSql, attendanceStatsJoin } from '../utils/attendance'
+import { normalizeLocalDateTime } from '../utils/date-time'
 
 type SimpleRow = RowDataPacket & Record<string, string | number | null>
 
@@ -18,7 +20,7 @@ function positiveInt(value: unknown, label: string): number {
 
 function optionalDate(value: unknown, label: string): string | null {
   if (value === undefined || value === null || value === '') return null
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+  if (typeof value !== 'string' || !normalizeLocalDateTime(`${value}T00:00`)) {
     throw new HttpError(400, `${label} phải có định dạng YYYY-MM-DD`)
   }
   return value
@@ -31,12 +33,17 @@ studentRouter.get('/dashboard', async (request, response) => {
     [studentId],
   )
   const [summary] = await database.query<SimpleRow[]>(
-    `SELECT COUNT(DISTINCT CASE WHEN gd.trang_thai = 'dang_hoc' THEN gd.lop_hoc_id END) AS activeClasses,
+    `SELECT COUNT(DISTINCT CASE WHEN gd.trang_thai = 'dang_hoc' AND l.trang_thai = 'dang_hoc' THEN gd.lop_hoc_id END) AS activeClasses,
       COUNT(DISTINCT CASE WHEN dd.trang_thai = 'co_mat' THEN dd.id END) AS present,
       COUNT(DISTINCT CASE WHEN dd.trang_thai = 'di_muon' THEN dd.id END) AS late,
-      COUNT(DISTINCT CASE WHEN dd.trang_thai = 'vang' THEN dd.id END) AS absent
-     FROM ghi_danh gd LEFT JOIN diem_danh dd ON dd.ghi_danh_id = gd.id
-     WHERE gd.hoc_vien_id = ?`,
+      COUNT(DISTINCT CASE WHEN dd.trang_thai = 'vang' THEN dd.id END) AS absent,
+      COUNT(bh.id) AS expectedAttendance, COUNT(dd.id) AS recordedAttendance,
+      COALESCE(100 * SUM(CASE WHEN dd.trang_thai IN ('co_mat', 'di_muon') THEN 1 ELSE 0 END) /
+        NULLIF(COUNT(bh.id), 0), 0) AS attendanceRate
+     FROM ghi_danh gd JOIN lop_hoc l ON l.id = gd.lop_hoc_id
+     LEFT JOIN buoi_hoc bh ON bh.lop_hoc_id = l.id AND bh.bat_dau <= NOW() AND bh.trang_thai <> 'da_huy'
+     LEFT JOIN diem_danh dd ON dd.ghi_danh_id = gd.id AND dd.buoi_hoc_id = bh.id
+     WHERE gd.hoc_vien_id = ? AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')`,
     [studentId],
   )
   const [debt] = await database.query<SimpleRow[]>(
@@ -109,6 +116,7 @@ studentRouter.get('/classes', async (request, response) => {
 studentRouter.get('/sessions', async (request, response) => {
   const from = optionalDate(request.query.from, 'Ngày bắt đầu')
   const to = optionalDate(request.query.to, 'Ngày kết thúc')
+  if (from && to && to < from) throw new HttpError(400, 'Ngày kết thúc phải từ ngày bắt đầu trở đi')
   const [rows] = await database.query(
     `SELECT bh.id, l.id AS classId, l.ma_lop AS classCode, l.ten_lop AS className,
       bh.bat_dau AS startsAt, bh.ket_thuc AS endsAt, bh.trang_thai AS status,
@@ -149,10 +157,13 @@ studentRouter.get('/results', async (request, response) => {
     `SELECT bh.id AS sessionId, gd.id AS enrollmentId, l.id AS classId,
       l.ma_lop AS classCode, l.ten_lop AS className,
       bh.bat_dau AS startsAt, dd.trang_thai AS status, dd.ghi_chu AS note
-     FROM ghi_danh gd JOIN diem_danh dd ON dd.ghi_danh_id = gd.id
-     JOIN buoi_hoc bh ON bh.id = dd.buoi_hoc_id
+     FROM ghi_danh gd JOIN buoi_hoc bh ON bh.lop_hoc_id = gd.lop_hoc_id
+       OR EXISTS (SELECT 1 FROM diem_danh old WHERE old.buoi_hoc_id = bh.id AND old.ghi_danh_id = gd.id)
+     LEFT JOIN diem_danh dd ON dd.ghi_danh_id = gd.id AND dd.buoi_hoc_id = bh.id
      JOIN lop_hoc l ON l.id = bh.lop_hoc_id
-     WHERE gd.hoc_vien_id = ? ORDER BY bh.bat_dau DESC`,
+     WHERE gd.hoc_vien_id = ? AND (gd.trang_thai IN ('dang_hoc', 'hoan_thanh') OR dd.id IS NOT NULL)
+       AND bh.bat_dau <= NOW() AND bh.trang_thai <> 'da_huy'
+     ORDER BY bh.bat_dau DESC`,
     [studentId],
   )
   response.json({ success: true, data: { exams, attendance } })
@@ -182,10 +193,7 @@ studentRouter.get('/certificates', async (request, response) => {
       COALESCE(cc.ten_khoa_hoc_luc_cap, k.ten_khoa_hoc) AS courseName,
       COALESCE(cc.ma_lop_luc_cap, l.ma_lop) AS classCode,
       COALESCE(cc.ten_lop_luc_cap, l.ten_lop) AS className,
-      (SELECT ROUND(AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4), 2)
-       FROM ket_qua_thi kq WHERE kq.ghi_danh_id = gd.id
-         AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
-         AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS average,
+      CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(cc.ho_so_luc_duyet, '$.average')), 'null') AS DECIMAL(10,4)) AS average,
       COUNT(lt.id) AS downloads
      FROM chung_chi cc JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id
      JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
@@ -214,10 +222,13 @@ studentRouter.get('/certificate-downloads', async (request, response) => {
 studentRouter.get('/certificate-eligibility', async (request, response) => {
   const [rows] = await database.query<SimpleRow[]>(
     `SELECT gd.id AS enrollmentId, gd.trang_thai AS enrollmentStatus,
-      k.ten_khoa_hoc AS courseName, l.id AS classId, l.ma_lop AS classCode, l.ten_lop AS className,
-      COALESCE((SELECT ROUND(100 * SUM(dd.trang_thai IN ('co_mat', 'di_muon')) /
-        NULLIF(COUNT(*), 0), 0) FROM diem_danh dd WHERE dd.ghi_danh_id = gd.id), 0) AS attendance,
-      (SELECT ROUND(AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4), 2)
+      COALESCE(cc.ten_khoa_hoc_luc_cap, k.ten_khoa_hoc) AS courseName, l.id AS classId,
+      COALESCE(cc.ma_lop_luc_cap, l.ma_lop) AS classCode,
+      COALESCE(cc.ten_lop_luc_cap, l.ten_lop) AS className,
+      cc.trang_thai AS certificateStatus,
+      cc.ho_so_luc_duyet AS approvalSnapshot,
+      ${attendanceRateSql} AS attendance, ${attendanceCountColumns},
+      (SELECT AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4)
         FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
         WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id
           AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
@@ -231,6 +242,8 @@ studentRouter.get('/certificate-eligibility', async (request, response) => {
         AND NOT EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan')) AS paid
      FROM ghi_danh gd JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
      LEFT JOIN lop_hoc l ON l.id = gd.lop_hoc_id
+     LEFT JOIN chung_chi cc ON cc.ghi_danh_id = gd.id
+     ${attendanceStatsJoin}
      WHERE gd.hoc_vien_id = ? AND gd.trang_thai <> 'da_huy'
      ORDER BY gd.id DESC`,
     [request.auth!.userId],
@@ -238,15 +251,27 @@ studentRouter.get('/certificate-eligibility', async (request, response) => {
   response.json({
     success: true,
     data: rows.map((item) => {
+      const snapshot = item.approvalSnapshot
+        ? (typeof item.approvalSnapshot === 'string' ? JSON.parse(item.approvalSnapshot) : item.approvalSnapshot) as Record<string, unknown>
+        : null
+      const value = (key: string) => snapshot ? snapshot[key] : item[key]
+      const averageValue = value('average')
+      const average = averageValue === null || averageValue === undefined || averageValue === 'null' ? null : Number(averageValue)
       const input = {
-        enrollmentStatus: String(item.enrollmentStatus),
-        paid: Boolean(item.paid),
-        attendance: Number(item.attendance),
-        average: item.average === null ? null : Number(item.average),
-        requiredExams: Number(item.requiredExams),
-        completedExams: Number(item.completedExams),
+        enrollmentStatus: String(value('enrollmentStatus')),
+        paid: [true, 1, '1'].includes(value('paid') as boolean | number | string),
+        attendance: Number(value('attendance')),
+        expectedAttendance: Number(value('expectedAttendance')),
+        recordedAttendance: Number(value('recordedAttendance')),
+        average: average !== null && Number.isFinite(average) ? average : null,
+        requiredExams: Number(value('requiredExams')),
+        completedExams: Number(value('completedExams')),
       }
-      return { ...item, eligible: isCertificateEligible(input), ineligibleReasons: getCertificateEligibilityReasons(input) }
+      const { approvalSnapshot: _snapshot, ...output } = item
+      return {
+        ...output, ...input, presentAttendance: Number(value('presentAttendance')),
+        eligible: isCertificateEligible(input), ineligibleReasons: getCertificateEligibilityReasons(input),
+      }
     }),
   })
 })

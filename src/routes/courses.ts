@@ -3,6 +3,7 @@ import type { ResultSetHeader, RowDataPacket } from 'mysql2'
 import { database } from '../config/database'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { HttpError } from '../utils/http-error'
+import { parseTuitionAmount } from '../utils/operations'
 
 type CourseRow = RowDataPacket & {
   id: number
@@ -41,8 +42,9 @@ function parseCourse(body: Record<string, unknown>, current?: CourseRow): Course
     return value.trim()
   }
   const number = (key: 'sessions' | 'tuition', label: string): number => {
-    const value = Number(body[key] ?? current?.[key])
-    if (!Number.isFinite(value) || value <= 0) throw new HttpError(400, `${label} phải lớn hơn 0`)
+    const raw = body[key] ?? current?.[key]
+    const value = key === 'tuition' ? parseTuitionAmount(raw) : Number(raw)
+    if (value === null || !Number.isSafeInteger(value) || value <= 0) throw new HttpError(400, `${label} phải là số nguyên dương; chưa hỗ trợ khóa miễn phí`)
     return value
   }
   const status = body.status ?? current?.status ?? 'dang_mo'

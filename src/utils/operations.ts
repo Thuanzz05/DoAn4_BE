@@ -33,28 +33,33 @@ export function getReportPeriod(
   return null
 }
 
-export function isCertificateEligible(input: {
+export type CertificateEligibility = {
   enrollmentStatus: string
   paid: boolean
   attendance: number
+  expectedAttendance: number
+  recordedAttendance: number
   average: number | null
   requiredExams: number
   completedExams: number
-}): boolean {
+}
+
+export function parseTuitionAmount(value: unknown): number | null {
+  if (typeof value !== 'number' && typeof value !== 'string') return null
+  if (typeof value === 'string' && !value.trim()) return null
+  const amount = Number(value)
+  return Number.isSafeInteger(amount) && amount > 0 && amount <= 999999999999 ? amount : null
+}
+
+export function isCertificateEligible(input: CertificateEligibility): boolean {
   return getCertificateEligibilityReasons(input).length === 0
 }
 
-export function getCertificateEligibilityReasons(input: {
-  enrollmentStatus: string
-  paid: boolean
-  attendance: number
-  average: number | null
-  requiredExams: number
-  completedExams: number
-}): string[] {
+export function getCertificateEligibilityReasons(input: CertificateEligibility): string[] {
   const reasons: string[] = []
   if (input.enrollmentStatus !== 'hoan_thanh') reasons.push('Chưa hoàn thành khóa học')
   if (!input.paid) reasons.push('Chưa hoàn tất học phí')
+  if (input.expectedAttendance < 1 || input.recordedAttendance < input.expectedAttendance) reasons.push('Chưa có đủ điểm danh cho các buổi đã học')
   if (input.attendance < 80) reasons.push('Tỷ lệ chuyên cần dưới 80%')
   if (input.requiredExams === 0) reasons.push('Lớp học chưa có kỳ thi')
   else if (input.completedExams < input.requiredExams) reasons.push(`Chưa hoàn thành tất cả kỳ thi (${input.completedExams}/${input.requiredExams})`)

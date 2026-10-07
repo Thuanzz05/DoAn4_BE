@@ -10,6 +10,7 @@
     "start": "node dist/server.js",
     "type-check": "tsc --noEmit",
     "test": "tsx --test src/**/*.test.ts",
+    "test:integration": "tsx --test src/business-flow.test.ts",
     "create-admin": "tsx src/scripts/create-admin.ts"
   },
   "dependencies": {
@@ -23,7 +24,8 @@
     "jsonwebtoken": "^9.0.3",
     "mysql2": "^3.24.4",
     "nodemailer": "^10.0.10",
-    "pdfkit": "^0.20.2"
+    "pdfkit": "^0.20.2",
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
@@ -32,6 +34,7 @@
     "@types/node": "^22.17.2",
     "@types/nodemailer": "^8.0.2",
     "@types/pdfkit": "^0.17.6",
+    "@types/swagger-ui-express": "^4.1.8",
     "tsx": "^4.20.4",
     "typescript": "~5.8.3"
   },

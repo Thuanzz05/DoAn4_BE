@@ -8,7 +8,9 @@ import { env } from '../config/env'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { HttpError } from '../utils/http-error'
 import { createCertificatePdf } from '../services/certificate-pdf'
-import { getCertificateEligibilityReasons, getReportPeriod, isCertificateEligible } from '../utils/operations'
+import { getCertificateEligibilityReasons, getReportPeriod, isCertificateEligible, parseTuitionAmount, type CertificateEligibility } from '../utils/operations'
+import { attendanceRateSql, attendanceStatsJoin } from '../utils/attendance'
+import { normalizeLocalDateTime } from '../utils/date-time'
 
 type SimpleRow = RowDataPacket & Record<string, string | number | null>
 type PaymentMethod = 'tien_mat' | 'chuyen_khoan'
@@ -19,6 +21,9 @@ type CandidateRow = SimpleRow & {
   average: number | null
   requiredExams: number
   completedExams: number
+  expectedAttendance: number
+  recordedAttendance: number
+  presentAttendance: number
   paid: number
   certificateId: number | null
 }
@@ -31,6 +36,8 @@ type CertificateIssueRow = CandidateRow & {
   language: string
   classCode: string
   className: string
+  verificationCode: string | null
+  issuedAt: string | null
 }
 
 export const operationsRouter = Router()
@@ -48,7 +55,7 @@ function requiredText(value: unknown, label: string): string {
 
 function date(value: unknown, label: string): string {
   const parsed = requiredText(value, label)
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(parsed) || Number.isNaN(Date.parse(`${parsed}T00:00:00Z`))) {
+  if (!normalizeLocalDateTime(`${parsed}T00:00`)) {
     throw new HttpError(400, `${label} phải có định dạng YYYY-MM-DD`)
   }
   return parsed
@@ -67,34 +74,52 @@ const invoiceSelect = `SELECT hd.id, hd.ma_hoa_don AS code, hd.ghi_danh_id AS en
   JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
   LEFT JOIN lop_hoc l ON l.id = gd.lop_hoc_id`
 
-const candidateSelect = `SELECT gd.id AS enrollmentId, gd.trang_thai AS enrollmentStatus,
+const frozenNumber = (key: string, fallback: string) => {
+  const value = `JSON_UNQUOTE(JSON_EXTRACT(cc.ho_so_luc_duyet, '$.${key}'))`
+  return `CASE WHEN cc.ho_so_luc_duyet IS NOT NULL THEN CASE ${value}
+    WHEN 'true' THEN 1 WHEN 'false' THEN 0 ELSE CAST(NULLIF(${value}, 'null') AS DECIMAL(16,8)) END ELSE ${fallback} END`
+}
+const candidateSelect = `SELECT gd.id AS enrollmentId, gd.lop_hoc_id AS classId,
+  COALESCE(JSON_UNQUOTE(JSON_EXTRACT(cc.ho_so_luc_duyet, '$.enrollmentStatus')), gd.trang_thai) AS enrollmentStatus,
   COALESCE(cc.ma_hoc_vien_luc_cap, hv.ma_nguoi_dung) AS studentCode,
   COALESCE(cc.ten_hoc_vien_luc_cap, hv.ho_ten) AS studentName,
   COALESCE(cc.ma_lop_luc_cap, l.ma_lop) AS classCode,
   COALESCE(cc.ten_lop_luc_cap, l.ten_lop) AS className,
   COALESCE(cc.ten_khoa_hoc_luc_cap, k.ten_khoa_hoc) AS courseName,
   COALESCE(cc.ngoai_ngu_luc_cap, k.ngoai_ngu) AS language,
-  COALESCE((SELECT ROUND(100 * SUM(dd.trang_thai IN ('co_mat', 'di_muon')) / NULLIF(COUNT(*), 0), 0)
-    FROM diem_danh dd WHERE dd.ghi_danh_id = gd.id), 0) AS attendance,
-  (SELECT ROUND(AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4), 2)
+  ${frozenNumber('attendance', attendanceRateSql)} AS attendance,
+  ${frozenNumber('expectedAttendance', 'COALESCE(attendance_stats.expectedAttendance, 0)')} AS expectedAttendance,
+  ${frozenNumber('recordedAttendance', 'COALESCE(attendance_stats.recordedAttendance, 0)')} AS recordedAttendance,
+  ${frozenNumber('presentAttendance', 'COALESCE(attendance_stats.presentAttendance, 0)')} AS presentAttendance,
+  ${frozenNumber('average', `(SELECT AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4)
     FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
     WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id
       AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
-      AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS average,
-  (SELECT COUNT(*) FROM ky_thi kt WHERE kt.lop_hoc_id = gd.lop_hoc_id) AS requiredExams,
-  (SELECT COUNT(*) FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
+      AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL)`)} AS average,
+  ${frozenNumber('requiredExams', '(SELECT COUNT(*) FROM ky_thi kt WHERE kt.lop_hoc_id = gd.lop_hoc_id)')} AS requiredExams,
+  ${frozenNumber('completedExams', `(SELECT COUNT(*) FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
     WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id
       AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
-      AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS completedExams,
-  (EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
-    AND NOT EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan')) AS paid,
+      AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL)`)} AS completedExams,
+  ${frozenNumber('paid', `(EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
+    AND NOT EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan'))`)} AS paid,
   cc.id AS certificateId, cc.ma_chung_chi AS certificateCode,
   cc.ma_xac_thuc AS verificationCode, cc.trang_thai AS certificateStatus,
   cc.ngay_duyet AS approvedAt, cc.ngay_cap AS issuedAt, cc.duong_dan_pdf AS pdfPath
   FROM ghi_danh gd JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
   JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
   JOIN lop_hoc l ON l.id = gd.lop_hoc_id
-  LEFT JOIN chung_chi cc ON cc.ghi_danh_id = gd.id`
+  LEFT JOIN chung_chi cc ON cc.ghi_danh_id = gd.id
+  ${attendanceStatsJoin}`
+
+function eligibilityOf(item: CandidateRow): CertificateEligibility {
+  return {
+    enrollmentStatus: item.enrollmentStatus, paid: Boolean(item.paid), attendance: Number(item.attendance),
+    expectedAttendance: Number(item.expectedAttendance), recordedAttendance: Number(item.recordedAttendance),
+    average: item.average === null ? null : Number(item.average),
+    requiredExams: Number(item.requiredExams), completedExams: Number(item.completedExams),
+  }
+}
 
 operationsRouter.get('/certificates/verify/:code', async (request, response) => {
   const code = requiredText(request.params.code, 'Mã xác thực')
@@ -138,24 +163,31 @@ operationsRouter.post('/invoices', async (request, response) => {
   try {
     await connection.beginTransaction()
     const [enrollments] = await connection.query<SimpleRow[]>(
-      `SELECT gd.id, k.hoc_phi AS tuition FROM ghi_danh gd
+      `SELECT gd.id, k.hoc_phi AS tuition, cc.id AS certificateId,
+        (SELECT hd.so_tien FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id ORDER BY hd.id DESC LIMIT 1) AS originalAmount
+       FROM ghi_danh gd
        JOIN khoa_hoc k ON k.id = gd.khoa_hoc_id
+       LEFT JOIN chung_chi cc ON cc.ghi_danh_id = gd.id
        WHERE gd.id = ? AND gd.trang_thai <> 'da_huy' FOR UPDATE`,
       [enrollmentId],
     )
     if (!enrollments[0]) throw new HttpError(404, 'Không tìm thấy ghi danh còn hiệu lực')
+    if (enrollments[0].certificateId) throw new HttpError(409, 'Hồ sơ đã duyệt chứng chỉ, không được thay đổi nghĩa vụ học phí')
     const [existing] = await connection.query<SimpleRow[]>(
       `SELECT id FROM hoa_don WHERE ghi_danh_id = ? AND trang_thai <> 'da_huy' LIMIT 1`,
       [enrollmentId],
     )
     if (existing[0]) throw new HttpError(409, 'Ghi danh đã có hóa đơn còn hiệu lực')
-    const amount = request.body.amount === undefined ? Number(enrollments[0].tuition) : Number(request.body.amount)
-    if (!Number.isFinite(amount) || amount <= 0) throw new HttpError(400, 'Số tiền phải lớn hơn 0')
+    const amount = parseTuitionAmount(enrollments[0].originalAmount ?? enrollments[0].tuition)
+    if (amount === null) throw new HttpError(400, 'Học phí phải là số nguyên dương; chưa hỗ trợ khóa miễn phí')
+    if (request.body.amount !== undefined && parseTuitionAmount(request.body.amount) !== amount) {
+      throw new HttpError(400, 'Thu trọn học phí đã chốt khi ghi danh, không hỗ trợ giảm phí hoặc trả góp')
+    }
     const code = `HD-${new Date().getFullYear()}-${randomInt(100000, 1000000)}`
     const [result] = await connection.execute<ResultSetHeader>(
       `INSERT INTO hoa_don (ma_hoa_don, ghi_danh_id, so_tien, ngay_lap, han_thanh_toan)
        VALUES (?, ?, ?, CURDATE(), ?)`,
-      [code, enrollmentId, Math.trunc(amount), dueDate],
+      [code, enrollmentId, amount, dueDate],
     )
     await connection.execute(
       `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
@@ -207,12 +239,26 @@ operationsRouter.patch('/invoices/:id/payment', async (request, response) => {
 operationsRouter.patch('/invoices/:id/cancel', async (request, response) => {
   const invoiceId = positiveInt(request.params.id, 'Hóa đơn')
   const reason = requiredText(request.body.reason, 'Lý do hủy').slice(0, 255)
-  const [result] = await database.execute<ResultSetHeader>(
-    `UPDATE hoa_don SET trang_thai = 'da_huy', ly_do_huy = ?
-     WHERE id = ? AND trang_thai = 'chua_thanh_toan'`,
-    [reason, invoiceId],
-  )
-  if (!result.affectedRows) throw new HttpError(409, 'Chỉ được hủy hóa đơn chưa thanh toán')
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [result] = await connection.execute<ResultSetHeader>(
+      `UPDATE hoa_don hd SET hd.trang_thai = 'da_huy', hd.ly_do_huy = ?
+       WHERE hd.id = ? AND hd.trang_thai = 'chua_thanh_toan'
+         AND NOT EXISTS (SELECT 1 FROM chung_chi cc WHERE cc.ghi_danh_id = hd.ghi_danh_id)`,
+      [reason, invoiceId],
+    )
+    if (!result.affectedRows) throw new HttpError(409, 'Chỉ được hủy hóa đơn chưa thanh toán và chưa chốt chứng chỉ; chưa hỗ trợ hoàn tiền')
+    await connection.execute(
+      `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
+       SELECT gd.hoc_vien_id, 'Hóa đơn đã hủy', CONCAT('Hóa đơn ', hd.ma_hoa_don, ': ', ?)
+       FROM hoa_don hd JOIN ghi_danh gd ON gd.id = hd.ghi_danh_id WHERE hd.id = ?`, [reason, invoiceId],
+    )
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally { connection.release() }
   response.json({ success: true, message: 'Đã hủy hóa đơn' })
 })
 
@@ -221,14 +267,7 @@ operationsRouter.get('/certificates/candidates', async (_request, response) => {
   response.json({
     success: true,
     data: rows.map((item) => {
-      const input = {
-        enrollmentStatus: item.enrollmentStatus,
-        paid: Boolean(item.paid),
-        attendance: Number(item.attendance),
-        average: item.average === null ? null : Number(item.average),
-        requiredExams: Number(item.requiredExams),
-        completedExams: Number(item.completedExams),
-      }
+      const input = eligibilityOf(item)
       return { ...item, eligible: isCertificateEligible(input), ineligibleReasons: getCertificateEligibilityReasons(input) }
     }),
   })
@@ -242,26 +281,28 @@ operationsRouter.post('/certificates/approve', async (request, response) => {
   const connection = await database.getConnection()
   try {
     await connection.beginTransaction()
+    await connection.query(
+      `SELECT id FROM lop_hoc WHERE id IN (SELECT lop_hoc_id FROM ghi_danh
+       WHERE id IN (${ids.map(() => '?').join(',')})) ORDER BY id FOR UPDATE`, ids,
+    )
     const [rows] = await connection.query<CandidateRow[]>(
       `${candidateSelect} WHERE gd.id IN (${ids.map(() => '?').join(',')}) FOR UPDATE`,
       ids,
     )
-    if (rows.length !== ids.length || rows.some((item) => !isCertificateEligible({
-      enrollmentStatus: item.enrollmentStatus,
-      paid: Boolean(item.paid),
-      attendance: Number(item.attendance),
-      average: item.average === null ? null : Number(item.average),
-      requiredExams: Number(item.requiredExams),
-      completedExams: Number(item.completedExams),
-    }))) {
+    if (rows.length !== ids.length || rows.some((item) => !isCertificateEligible(eligibilityOf(item)))) {
       throw new HttpError(409, 'Danh sách có học viên chưa đủ điều kiện cấp chứng chỉ')
     }
     if (rows.some((item) => item.certificateId !== null)) throw new HttpError(409, 'Danh sách có học viên đã được phê duyệt chứng chỉ')
     let approved = 0
-    for (const enrollmentId of ids) {
+    for (const item of rows) {
+      const enrollmentId = item.enrollmentId
       const [result] = await connection.execute<ResultSetHeader>(
-        'INSERT INTO chung_chi (ghi_danh_id, nguoi_duyet_id) VALUES (?, ?)',
-        [enrollmentId, request.auth!.userId],
+        `INSERT INTO chung_chi (ghi_danh_id, nguoi_duyet_id, ma_hoc_vien_luc_cap, ten_hoc_vien_luc_cap,
+          ten_khoa_hoc_luc_cap, ngoai_ngu_luc_cap, ma_lop_luc_cap, ten_lop_luc_cap, ho_so_luc_duyet)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [enrollmentId, request.auth!.userId, item.studentCode, item.studentName, item.courseName,
+          item.language, item.classCode, item.className,
+          JSON.stringify({ ...eligibilityOf(item), paid: Number(item.paid), presentAttendance: Number(item.presentAttendance) })],
       )
       approved += result.affectedRows ? 1 : 0
       await connection.execute(
@@ -282,14 +323,13 @@ operationsRouter.post('/certificates/approve', async (request, response) => {
 })
 
 async function generateCertificate(certificateId: number, expectedStatus: 'da_duyet' | 'da_cap') {
-  const verificationCode = randomBytes(24).toString('hex')
-  const filename = `${verificationCode}.pdf`
+  const filename = `${randomBytes(24).toString('hex')}.pdf`
   const outputPath = join(env.storageDir, 'certificates', filename)
   const pdfPath = `${env.publicUrl}/uploads/certificates/${filename}`
-  const verificationUrl = `${env.clientUrl}/verify-certificate?code=${verificationCode}`
   const connection = await database.getConnection()
   let oldPdfPath: string | null = null
   let code = ''
+  let verificationCode = ''
   try {
     await connection.beginTransaction()
     const [certificates] = await connection.query<CertificateIssueRow[]>(
@@ -298,18 +338,14 @@ async function generateCertificate(certificateId: number, expectedStatus: 'da_du
     )
     const certificate = certificates[0]
     if (!certificate) throw new HttpError(409, expectedStatus === 'da_duyet' ? 'Chứng chỉ không tồn tại hoặc đã được cấp' : 'Chỉ được cấp lại chứng chỉ đã phát hành')
-    const eligibility = {
-      enrollmentStatus: certificate.enrollmentStatus,
-      paid: Boolean(certificate.paid),
-      attendance: Number(certificate.attendance),
-      average: certificate.average === null ? null : Number(certificate.average),
-      requiredExams: Number(certificate.requiredExams),
-      completedExams: Number(certificate.completedExams),
-    }
-    if (!isCertificateEligible(eligibility)) {
+    const eligibility = eligibilityOf(certificate)
+    if (expectedStatus === 'da_duyet' && !isCertificateEligible(eligibility)) {
       throw new HttpError(409, `Không thể cấp chứng chỉ: ${getCertificateEligibilityReasons(eligibility).join('; ')}`)
     }
     code = certificate.certificateCode ?? `CC-${new Date().getFullYear()}-${String(certificateId).padStart(6, '0')}`
+    verificationCode = certificate.verificationCode ?? randomBytes(24).toString('hex')
+    const issuedAt = certificate.issuedAt ? new Date(certificate.issuedAt.replace(' ', 'T') + '+07:00') : new Date()
+    const verificationUrl = `${env.clientUrl}/verify-certificate?code=${verificationCode}`
     oldPdfPath = certificate.pdfPath
     await createCertificatePdf(outputPath, {
       certificateCode: code,
@@ -319,12 +355,12 @@ async function generateCertificate(certificateId: number, expectedStatus: 'da_du
       className: certificate.className,
       classCode: certificate.classCode,
       language: certificate.language,
-      issuedAt: new Date(),
+      issuedAt,
       verificationUrl,
     })
     const [result] = await connection.execute<ResultSetHeader>(
       `UPDATE chung_chi SET ma_chung_chi = ?, ma_xac_thuc = ?, trang_thai = 'da_cap',
-        ngay_cap = NOW(), duong_dan_pdf = ?, ma_hoc_vien_luc_cap = ?, ten_hoc_vien_luc_cap = ?,
+        ngay_cap = COALESCE(ngay_cap, NOW()), duong_dan_pdf = ?, ma_hoc_vien_luc_cap = ?, ten_hoc_vien_luc_cap = ?,
         ten_khoa_hoc_luc_cap = ?, ngoai_ngu_luc_cap = ?, ma_lop_luc_cap = ?, ten_lop_luc_cap = ?
        WHERE id = ? AND trang_thai = ?`,
       [code, verificationCode, pdfPath, certificate.studentCode, certificate.studentName,
@@ -360,6 +396,48 @@ operationsRouter.patch('/certificates/:id/issue', async (request, response) => {
 operationsRouter.post('/certificates/:id/reissue', async (request, response) => {
   const data = await generateCertificate(positiveInt(request.params.id, 'Chứng chỉ'), 'da_cap')
   response.json({ success: true, data })
+})
+
+operationsRouter.patch('/certificates/:id/details', async (request, response) => {
+  const certificateId = positiveInt(request.params.id, 'Chứng chỉ')
+  const reason = requiredText(request.body.reason, 'Lý do đính chính')
+  if (reason.length > 255) throw new HttpError(400, 'Lý do đính chính tối đa 255 ký tự')
+  const fields = [
+    ['studentCode', 'ma_hoc_vien_luc_cap', 20], ['studentName', 'ten_hoc_vien_luc_cap', 150],
+    ['courseName', 'ten_khoa_hoc_luc_cap', 150], ['language', 'ngoai_ngu_luc_cap', 50],
+    ['classCode', 'ma_lop_luc_cap', 30], ['className', 'ten_lop_luc_cap', 150],
+  ] as const
+  const values = fields.map(([key, , limit]) => {
+    const value = requiredText(request.body[key], key)
+    if (value.length > limit) throw new HttpError(400, `${key} tối đa ${limit} ký tự`)
+    return value
+  })
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [rows] = await connection.query<CertificateIssueRow[]>(`${candidateSelect} WHERE cc.id = ? FOR UPDATE`, [certificateId])
+    const previous = rows[0]
+    if (!previous || previous.certificateStatus !== 'da_duyet') {
+      throw new HttpError(409, 'Chỉ được đính chính thông tin trước khi phát hành; cấp lại không thay nội dung chứng chỉ đã cấp')
+    }
+    const audit = JSON.stringify({ at: new Date().toISOString(), userId: request.auth!.userId, reason,
+      before: Object.fromEntries(fields.map(([key]) => [key, previous[key]])),
+      after: Object.fromEntries(fields.map(([key], index) => [key, values[index]])),
+    })
+    await connection.execute(
+      `UPDATE chung_chi SET ${fields.map(([, column]) => `${column} = ?`).join(', ')},
+        ho_so_luc_duyet = JSON_SET(ho_so_luc_duyet, '$.corrections',
+          JSON_ARRAY_APPEND(COALESCE(JSON_EXTRACT(ho_so_luc_duyet, '$.corrections'), JSON_ARRAY()), '$', CAST(? AS JSON)))
+       WHERE id = ?`, [...values, audit, certificateId],
+    )
+    await connection.execute(
+      `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
+       SELECT gd.hoc_vien_id, 'Đính chính hồ sơ chứng chỉ', ?
+       FROM chung_chi cc JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id WHERE cc.id = ?`, [reason, certificateId],
+    )
+    await connection.commit()
+    response.json({ success: true, message: 'Đã đính chính thông tin; giữ nguyên điểm, chuyên cần và nghĩa vụ học phí đã duyệt' })
+  } catch (error) { await connection.rollback(); throw error } finally { connection.release() }
 })
 
 operationsRouter.get('/reports', async (request, response) => {

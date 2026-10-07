@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS khoa_hoc (
   trang_thai ENUM('dang_mo', 'tam_an') NOT NULL DEFAULT 'dang_mo',
   ngay_tao DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_khoa_hoc_so_buoi CHECK (so_buoi > 0),
-  CONSTRAINT chk_khoa_hoc_hoc_phi CHECK (hoc_phi >= 0)
+  CONSTRAINT chk_khoa_hoc_hoc_phi CHECK (hoc_phi > 0)
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS phong_hoc (
@@ -199,8 +199,14 @@ CREATE TABLE IF NOT EXISTS chung_chi (
   ngoai_ngu_luc_cap VARCHAR(50) NULL,
   ma_lop_luc_cap VARCHAR(30) NULL,
   ten_lop_luc_cap VARCHAR(150) NULL,
+  ho_so_luc_duyet JSON NOT NULL,
   CONSTRAINT fk_chung_chi_ghi_danh FOREIGN KEY (ghi_danh_id) REFERENCES ghi_danh(id),
   CONSTRAINT fk_chung_chi_nguoi_duyet FOREIGN KEY (nguoi_duyet_id) REFERENCES nguoi_dung(id),
+  CONSTRAINT chk_chung_chi_ho_so CHECK (
+    ma_hoc_vien_luc_cap IS NOT NULL AND ten_hoc_vien_luc_cap IS NOT NULL
+    AND ten_khoa_hoc_luc_cap IS NOT NULL AND ngoai_ngu_luc_cap IS NOT NULL
+    AND ma_lop_luc_cap IS NOT NULL AND ten_lop_luc_cap IS NOT NULL
+  ),
   CONSTRAINT chk_chung_chi_da_cap CHECK (
     trang_thai <> 'da_cap' OR
     (ma_chung_chi IS NOT NULL AND ma_xac_thuc IS NOT NULL

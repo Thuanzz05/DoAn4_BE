@@ -7,6 +7,8 @@ import { database } from '../config/database'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { validateImportedStudents, normalizeHeader, type ImportedStudentRow } from '../utils/enrollment-import'
 import { HttpError } from '../utils/http-error'
+import { ensureEnrollmentClass } from '../utils/enrollment'
+import { parseTuitionAmount } from '../utils/operations'
 
 type SimpleRow = RowDataPacket & Record<string, string | number | null>
 type QueryConnection = PoolConnection | typeof database
@@ -111,21 +113,13 @@ async function ensureTarget(
   lock = false,
 ): Promise<number> {
   const [courses] = await connection.query<SimpleRow[]>(
-    `SELECT hoc_phi AS tuition FROM khoa_hoc WHERE id = ?${lock ? ' FOR UPDATE' : ''}`,
+    `SELECT hoc_phi AS tuition FROM khoa_hoc WHERE id = ? AND trang_thai = 'dang_mo'${lock ? ' FOR UPDATE' : ''}`,
     [courseId],
   )
-  if (!courses[0]) throw new HttpError(400, 'Khóa học không tồn tại')
+  if (!courses[0]) throw new HttpError(400, 'Khóa học không tồn tại hoặc đã tạm ẩn')
+  if (parseTuitionAmount(courses[0].tuition) === null) throw new HttpError(409, 'Khóa học phải có học phí nguyên dương hợp lệ trước khi ghi danh')
   if (classId) {
-    const [classes] = await connection.query<SimpleRow[]>(
-      `SELECT l.si_so_toi_da AS capacity,
-        (SELECT COUNT(*) FROM ghi_danh gd WHERE gd.lop_hoc_id = l.id AND gd.trang_thai <> 'da_huy') AS enrolled
-       FROM lop_hoc l WHERE l.id = ? AND l.khoa_hoc_id = ? AND l.trang_thai <> 'da_huy'
-       ${lock ? 'FOR UPDATE' : ''}`,
-      [classId, courseId],
-    )
-    if (!classes[0]) throw new HttpError(400, 'Lớp không thuộc khóa học đã chọn')
-    const available = Number(classes[0].capacity) - Number(classes[0].enrolled)
-    if (students > available) throw new HttpError(409, `Lớp chỉ còn ${available} chỗ trống`)
+    await ensureEnrollmentClass(connection, classId, courseId, students, 0, lock)
   }
   return Number(courses[0].tuition)
 }
@@ -203,6 +197,7 @@ enrollmentImportRouter.post('/confirm', async (request, response) => {
          VALUES (?, ?, ?, CURDATE(), DATE_ADD(CURDATE(), INTERVAL 14 DAY))`,
         [invoiceCode, enrollment.insertId, tuition],
       )
+      await connection.execute("INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung) VALUES (?, 'Ghi danh khóa học mới', ?)", [user.insertId, `Bạn đã được ghi danh và tạo hóa đơn ${invoiceCode}.`])
       created.push({
         studentId: user.insertId, enrollmentId: enrollment.insertId, code,
         email: account.email, temporaryPassword: account.temporaryPassword, invoiceCode,

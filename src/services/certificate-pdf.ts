@@ -61,7 +61,7 @@ export async function createCertificatePdf(outputPath: string, data: Certificate
     document.fillColor('#092c28').fontSize(21).text(data.courseName, 60, 342, center)
     document.fillColor('#385a53').fontSize(10).text(`Lớp: ${data.className} (${data.classCode})  |  Ngoại ngữ: ${data.language}`, 60, 381, center)
 
-    const issued = new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(data.issuedAt)
+    const issued = new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', day: '2-digit', month: '2-digit', year: 'numeric' }).format(data.issuedAt)
     document.moveTo(100, 450).lineTo(300, 450).lineWidth(0.8).strokeColor('#9eb6aa').stroke()
     document.fillColor('#385a53').fontSize(9).text(`Mã chứng chỉ: ${data.certificateCode}`, 100, 460, { width: 200, align: 'center' })
     document.moveTo(width - 300, 450).lineTo(width - 100, 450).stroke()

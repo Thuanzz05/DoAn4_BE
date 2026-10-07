@@ -20,6 +20,14 @@ export function canMarkAttendance(status: string, hasStarted: boolean): boolean 
   return status !== 'da_huy' && hasStarted
 }
 
+export function canEditSession(status: string, hasStarted: boolean): boolean {
+  return status === 'da_huy' || (status === 'da_len_lich' && !hasStarted)
+}
+
+export function canCancelSession(status: string, hasStarted: boolean): boolean {
+  return status === 'da_len_lich' && !hasStarted
+}
+
 export function shouldSyncTeacherAssignment(
   currentTeacherId: number | null,
   nextTeacherId: number | null,
@@ -53,7 +61,10 @@ export function generateSessionDates(
 ): GeneratedSession[] {
   const [year, month, day] = startDate.split('-').map(Number)
   const cursor = new Date(year, month - 1, day)
-  if (!Number.isInteger(totalSessions) || totalSessions < 1 || !slots.length || Number.isNaN(cursor.getTime())) return []
+  if (!Number.isInteger(totalSessions) || totalSessions < 1 || !slots.length || Number.isNaN(cursor.getTime()) || dateText(cursor) !== startDate) return []
+  if (slots.some((slot) => !Number.isInteger(slot.dayOfWeek) || slot.dayOfWeek < 1 || slot.dayOfWeek > 7
+    || !/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(slot.startTime)
+    || !/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(slot.endTime) || slot.endTime <= slot.startTime)) return []
   const orderedSlots = [...slots].sort((a, b) => a.startTime.localeCompare(b.startTime))
   const sessions: GeneratedSession[] = []
 
