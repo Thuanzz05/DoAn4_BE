@@ -56,9 +56,9 @@ const resetLimiter = rateLimit({
   message: { success: false, message: 'Bạn đã yêu cầu quá nhiều mã, vui lòng thử lại sau.' },
 })
 
-function requiredString(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !value.trim()) throw new HttpError(400, `${label} là bắt buộc`)
-  return value.trim()
+function requiredString(value: unknown, label: string, trim = true): string {
+  if (typeof value !== 'string' || !(trim ? value.trim() : value)) throw new HttpError(400, `${label} là bắt buộc`)
+  return trim ? value.trim() : value
 }
 
 function publicUser(user: UserRow) {
@@ -113,7 +113,7 @@ authRouter.post('/register', authLimiter, async (request, response) => {
   const fullName = requiredString(request.body.fullName, 'Họ tên')
   const email = requiredString(request.body.email, 'Email').toLowerCase()
   const phone = requiredString(request.body.phone, 'Số điện thoại').replace(/\s/g, '')
-  const password = requiredString(request.body.password, 'Mật khẩu')
+  const password = requiredString(request.body.password, 'Mật khẩu', false)
   const birthDate = request.body.birthDate || null
 
   if (!emailPattern.test(email)) throw new HttpError(400, 'Email không hợp lệ')
@@ -144,7 +144,7 @@ authRouter.post('/register', authLimiter, async (request, response) => {
 
 authRouter.post('/login', authLimiter, async (request, response) => {
   const account = requiredString(request.body.account ?? request.body.username, 'Email hoặc mã người dùng')
-  const password = requiredString(request.body.password, 'Mật khẩu')
+  const password = requiredString(request.body.password, 'Mật khẩu', false)
   const [rows] = await database.query<UserRow[]>(
     'SELECT * FROM nguoi_dung WHERE email = ? OR ma_nguoi_dung = ? LIMIT 1',
     [account.toLowerCase(), account],
@@ -226,7 +226,7 @@ authRouter.post('/forgot-password', resetLimiter, async (request, response) => {
 authRouter.post('/reset-password', resetLimiter, async (request, response) => {
   const email = requiredString(request.body.email, 'Email').toLowerCase()
   const code = requiredString(request.body.code, 'Mã xác nhận')
-  const newPassword = requiredString(request.body.newPassword, 'Mật khẩu mới')
+  const newPassword = requiredString(request.body.newPassword, 'Mật khẩu mới', false)
   if (!/^\d{6}$/.test(code)) throw new HttpError(400, 'Mã xác nhận phải gồm 6 chữ số')
   if (!isValidPassword(newPassword)) throw new HttpError(400, 'Mật khẩu phải có ít nhất 8 ký tự')
 
@@ -245,23 +245,28 @@ authRouter.post('/reset-password', resetLimiter, async (request, response) => {
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
     await database.execute(
       `UPDATE ma_dat_lai_mat_khau
-       SET so_lan_nhap_sai = so_lan_nhap_sai + 1,
-           da_dung_luc = IF(so_lan_nhap_sai + 1 >= 5, NOW(), da_dung_luc)
-       WHERE id = ?`,
+       SET da_dung_luc = IF(so_lan_nhap_sai >= 4, NOW(), da_dung_luc),
+           so_lan_nhap_sai = so_lan_nhap_sai + 1
+       WHERE id = ? AND da_dung_luc IS NULL AND het_han_luc > NOW() AND so_lan_nhap_sai < 5`,
       [reset.id],
     )
     throw new HttpError(400, 'Mã xác nhận không hợp lệ hoặc đã hết hạn')
   }
 
+  const passwordHash = await bcrypt.hash(newPassword, 12)
   const connection = await database.getConnection()
   try {
     await connection.beginTransaction()
-    const passwordHash = await bcrypt.hash(newPassword, 12)
+    const [consumed] = await connection.execute<ResultSetHeader>(
+      `UPDATE ma_dat_lai_mat_khau SET da_dung_luc = NOW()
+       WHERE id = ? AND da_dung_luc IS NULL AND het_han_luc > NOW() AND so_lan_nhap_sai < 5`,
+      [reset.id],
+    )
+    if (consumed.affectedRows !== 1) throw new HttpError(400, 'Mã xác nhận không hợp lệ hoặc đã hết hạn')
     await connection.execute(
       'UPDATE nguoi_dung SET mat_khau_bam = ?, phien_ban_dang_nhap = phien_ban_dang_nhap + 1 WHERE id = ?',
       [passwordHash, reset.nguoi_dung_id],
     )
-    await connection.execute('UPDATE ma_dat_lai_mat_khau SET da_dung_luc = NOW() WHERE id = ?', [reset.id])
     await connection.commit()
   } catch (error) {
     await connection.rollback()
@@ -309,7 +314,7 @@ authRouter.patch('/password', requireAuth, async (request, response) => {
   const [rows] = await database.query<UserRow[]>('SELECT * FROM nguoi_dung WHERE id = ?', [request.auth!.userId])
   const user = rows[0]
   if (user.mat_khau_bam && !await bcrypt.compare(currentPassword, user.mat_khau_bam)) {
-    throw new HttpError(401, 'Mật khẩu hiện tại không chính xác')
+    throw new HttpError(400, 'Mật khẩu hiện tại không chính xác')
   }
   if (user.mat_khau_bam && await bcrypt.compare(newPassword, user.mat_khau_bam)) {
     throw new HttpError(400, 'Mật khẩu mới phải khác mật khẩu hiện tại')

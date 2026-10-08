@@ -149,7 +149,7 @@ studentRouter.get('/results', async (request, response) => {
       l.id AS classId, l.ma_lop AS classCode, l.ten_lop AS className,
       kq.nghe AS listening, kq.noi AS speaking, kq.doc AS reading, kq.viet AS writing,
       CASE WHEN kq.nghe IS NULL OR kq.noi IS NULL OR kq.doc IS NULL OR kq.viet IS NULL THEN NULL
-        ELSE ROUND((kq.nghe + kq.noi + kq.doc + kq.viet) / 4, 2) END AS average
+        ELSE (kq.nghe + kq.noi + kq.doc + kq.viet) / 4 END AS average
      FROM ghi_danh gd JOIN ky_thi kt ON kt.lop_hoc_id = gd.lop_hoc_id
        OR EXISTS (SELECT 1 FROM ket_qua_thi old
          WHERE old.ky_thi_id = kt.id AND old.ghi_danh_id = gd.id)

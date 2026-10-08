@@ -296,7 +296,7 @@ teacherRouter.get('/exams/:id/results', async (request, response) => {
       EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')
         AND NOT EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'chua_thanh_toan') AS eligible,
       CASE WHEN kq.nghe IS NULL OR kq.noi IS NULL OR kq.doc IS NULL OR kq.viet IS NULL THEN NULL
-        ELSE ROUND((kq.nghe + kq.noi + kq.doc + kq.viet) / 4, 2) END AS average
+        ELSE (kq.nghe + kq.noi + kq.doc + kq.viet) / 4 END AS average
      FROM ghi_danh gd JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
      LEFT JOIN ket_qua_thi kq ON kq.ghi_danh_id = gd.id AND kq.ky_thi_id = ?
      LEFT JOIN chung_chi cc ON cc.ghi_danh_id = gd.id
@@ -328,7 +328,7 @@ teacherRouter.put('/exams/:id/results', async (request, response) => {
       throw new HttpError(409, 'Đã hết hạn sửa điểm')
     }
     const [enrollments] = await connection.query<SimpleRow[]>(
-      `SELECT gd.id, cc.id AS certificateId,
+      `SELECT gd.id, cc.id AS certificateId, kq.id AS resultId,
         kq.nghe AS listening, kq.noi AS speaking, kq.doc AS reading, kq.viet AS writing
        FROM ghi_danh gd
        LEFT JOIN chung_chi cc ON cc.ghi_danh_id = gd.id
@@ -343,6 +343,7 @@ teacherRouter.put('/exams/:id/results', async (request, response) => {
     )
     const enrollmentById = new Map(enrollments.map((item) => [Number(item.id), item]))
     const receivedIds = new Set<number>()
+    let saved = 0
     for (const item of items as Record<string, unknown>[]) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) throw new HttpError(400, 'Dữ liệu bảng điểm không hợp lệ')
       const enrollmentId = positiveInt(item.enrollmentId, 'Ghi danh')
@@ -362,6 +363,7 @@ teacherRouter.put('/exams/:id/results', async (request, response) => {
         continue
       }
       receivedIds.add(enrollmentId)
+      if (enrollment.resultId === null && normalizedScores.every((score) => score === null)) continue
       await connection.execute(
         `INSERT INTO ket_qua_thi (ky_thi_id, ghi_danh_id, nghe, noi, doc, viet)
          VALUES (?, ?, ?, ?, ?, ?) AS incoming
@@ -369,9 +371,10 @@ teacherRouter.put('/exams/:id/results', async (request, response) => {
           doc = incoming.doc, viet = incoming.viet`,
         [examId, enrollmentId, ...normalizedScores],
       )
+      saved += 1
     }
     await connection.commit()
-    response.json({ success: true, message: 'Đã lưu bảng điểm', data: { saved: receivedIds.size } })
+    response.json({ success: true, message: 'Đã lưu bảng điểm', data: { saved } })
   } catch (error) {
     await connection.rollback()
     throw error

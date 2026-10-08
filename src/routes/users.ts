@@ -6,7 +6,7 @@ import { database } from '../config/database'
 import { env } from '../config/env'
 import { requireAuth, requireRole } from '../middlewares/auth'
 import { deliverAccountInformation, sendTemporaryPassword } from '../services/mailer'
-import { generateTemporaryPassword, isValidBirthDate } from '../utils/account'
+import { generateTemporaryPassword, isValidBirthDate, isValidPassword } from '../utils/account'
 import { HttpError } from '../utils/http-error'
 
 type VaiTro = 'quan_tri' | 'giao_vien' | 'hoc_vien'
@@ -77,12 +77,12 @@ usersRouter.post('/', async (request, response) => {
   const email = text(request.body.email, 'Email').toLowerCase()
   const phone = text(request.body.phone, 'Số điện thoại').replace(/\s/g, '')
   const password = request.body.password === undefined || request.body.password === ''
-    ? generateTemporaryPassword() : text(request.body.password, 'Mật khẩu')
+    ? generateTemporaryPassword() : request.body.password
   const role = request.body.role as 'giao_vien' | 'hoc_vien'
   if (!['giao_vien', 'hoc_vien'].includes(role)) throw new HttpError(400, 'Chỉ được tạo giáo viên hoặc học viên')
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new HttpError(400, 'Email không hợp lệ')
   if (!/^0\d{9}$/.test(phone)) throw new HttpError(400, 'Số điện thoại phải gồm 10 chữ số')
-  if (password.length < 8) throw new HttpError(400, 'Mật khẩu phải có ít nhất 8 ký tự')
+  if (!isValidPassword(password)) throw new HttpError(400, 'Mật khẩu phải có ít nhất 8 ký tự')
   const validatedBirthDate = birthDate(request.body.birthDate)
   const passwordHash = await bcrypt.hash(password, 12)
   try {
