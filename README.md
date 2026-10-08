@@ -14,7 +14,14 @@ Nếu nâng cấp từ phiên bản cũ đã có dữ liệu, chạy một lần
 `database/migrations/20261003_toan_ven_chung_chi.sql` trong MySQL Workbench trước khi khởi động backend.
 Sau đó chạy một lần `database/migrations/20261007_chot_ho_so_chung_chi.sql` để chốt hồ sơ từ lúc duyệt.
 Chạy `npm run migrate:academic-finance` để thêm bảng lịch sử kỳ thi và bảng chống gửi trùng nhắc học phí.
-Lệnh này chỉ tạo hai bảng nếu chưa tồn tại, không sửa dữ liệu hiện có.
+Lệnh này tạo các bảng lịch sử/nhắc phí còn thiếu, thêm cột hủy kỳ thi nháp và lịch sử buổi học.
+Có thể chạy lại an toàn; không xóa dữ liệu, không sửa điểm hoặc điểm danh hiện có.
+
+Quản trị viên xử lý buổi học tồn đọng tại **Lớp học → Chi tiết → Buổi học**:
+bổ sung điểm danh còn thiếu hoặc hủy buổi thực tế nghỉ khi chưa có điểm danh, rồi xếp học bù.
+Mọi thao tác cần lý do và lưu lịch sử; không ghi đè điểm danh cũ hoặc đổi giáo viên của buổi quá khứ.
+Không khóa giáo viên khi còn điểm danh tồn đọng. Kỳ thi nháp chỉ được hủy khi chưa có kết quả
+và chưa chốt hồ sơ chứng chỉ; kỳ thi đã hủy vẫn giữ lịch sử, không tính vào nghĩa vụ thi.
 
 Backend mặc định: `http://localhost:3000`. Kiểm tra bằng `GET /api/health`.
 
@@ -58,8 +65,12 @@ Swagger chỉ được mở ở môi trường không phải production, không 
 - `GET/POST/PATCH/DELETE /api/schedules`: xếp lịch, kiểm tra trùng phòng/giáo viên.
 - `POST /api/classes/:id/generate-sessions`: sinh các buổi học từ lịch hàng tuần.
 - `GET /api/classes/:id/academic` và `/export?section=all|attendance|grades`: danh sách học viên, chuyên cần, điểm danh thiếu và điểm toàn khóa; xuất Excel cùng nguồn dữ liệu.
+- `GET/PUT /api/sessions/:id/attendance`: quản trị viên xem và bổ sung điểm danh còn thiếu, bắt buộc lý do, không ghi đè dữ liệu cũ.
+- `PATCH /api/sessions/:id`, `POST /api/sessions/:id/cancel`: dời/xếp học bù hoặc hủy buổi chưa có điểm danh; lưu lý do và lịch sử trước/sau.
+- `GET /api/sessions/:id/history`: lịch sử xử lý buổi học.
 - `GET/POST /api/exams`, `PATCH /api/exams/:id`: quản trị viên quản lý kỳ thi và hạn sửa điểm; bắt buộc lý do, chặn thay đổi sau khi chốt chứng chỉ.
 - `GET /api/exams/:id/history`: lịch sử thay đổi, người thực hiện, lý do và dữ liệu trước/sau.
+- `POST /api/exams/:id/cancel`: hủy kỳ thi chưa có kết quả, giữ lịch sử và loại khỏi điều kiện chứng chỉ.
 - `GET/POST/PATCH /api/invoices`: quản lý hóa đơn, thanh toán và hủy hóa đơn.
 - `POST /api/invoices/reminders`: quét nhắc học phí đến hạn/quá hạn, không gửi thông báo trùng cho cùng hóa đơn, hạn và giai đoạn.
 - `GET /api/certificates/candidates`: danh sách và điều kiện xét cấp chứng chỉ.

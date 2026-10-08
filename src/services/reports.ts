@@ -69,7 +69,7 @@ export async function getReportData(periodValue: unknown, yearValue: unknown, un
                AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL THEN 1 END)) AS ready,
            AVG(CASE WHEN kq.nghe IS NOT NULL AND kq.noi IS NOT NULL AND kq.doc IS NOT NULL
              AND kq.viet IS NOT NULL THEN (kq.nghe + kq.noi + kq.doc + kq.viet) / 4 END) AS average
-         FROM ghi_danh gd LEFT JOIN ky_thi kt ON kt.lop_hoc_id = gd.lop_hoc_id
+         FROM ghi_danh gd LEFT JOIN ky_thi kt ON kt.lop_hoc_id = gd.lop_hoc_id AND kt.da_huy = FALSE
          LEFT JOIN ket_qua_thi kq ON kq.ky_thi_id = kt.id AND kq.ghi_danh_id = gd.id
          WHERE gd.ngay_ghi_danh >= ? AND gd.ngay_ghi_danh < ? AND gd.trang_thai <> 'da_huy'
            AND gd.lop_hoc_id IS NOT NULL GROUP BY gd.id, gd.lop_hoc_id, gd.trang_thai

@@ -95,12 +95,12 @@ const candidateSelect = `SELECT gd.id AS enrollmentId, gd.lop_hoc_id AS classId,
   ${frozenNumber('presentAttendance', 'COALESCE(attendance_stats.presentAttendance, 0)')} AS presentAttendance,
   ${frozenNumber('average', `(SELECT AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4)
     FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
-    WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id
+    WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id AND kt.da_huy = FALSE
       AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
       AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL)`)} AS average,
-  ${frozenNumber('requiredExams', '(SELECT COUNT(*) FROM ky_thi kt WHERE kt.lop_hoc_id = gd.lop_hoc_id)')} AS requiredExams,
+  ${frozenNumber('requiredExams', '(SELECT COUNT(*) FROM ky_thi kt WHERE kt.lop_hoc_id = gd.lop_hoc_id AND kt.da_huy = FALSE)')} AS requiredExams,
   ${frozenNumber('completedExams', `(SELECT COUNT(*) FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
-    WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id
+    WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id AND kt.da_huy = FALSE
       AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
       AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL)`)} AS completedExams,
   ${frozenNumber('paid', `(EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')

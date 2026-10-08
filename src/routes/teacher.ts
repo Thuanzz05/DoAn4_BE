@@ -54,14 +54,15 @@ async function ownedSession(teacherId: number, sessionId: number, connection: Po
 
 async function ownedExam(teacherId: number, examId: number, connection: PoolConnection | typeof database = database): Promise<SimpleRow> {
   const [rows] = await connection.query<SimpleRow[]>(
-    `SELECT kt.id, kt.lop_hoc_id AS classId, kt.han_sua_diem AS deadline,
+    `SELECT kt.id, kt.lop_hoc_id AS classId, kt.han_sua_diem AS deadline, kt.da_huy AS canceled,
       kt.han_sua_diem IS NOT NULL AND kt.han_sua_diem <= NOW() AS deadlinePassed,
       l.trang_thai = 'da_huy' AS locked
      FROM ky_thi kt JOIN lop_hoc l ON l.id = kt.lop_hoc_id
-     WHERE kt.id = ? AND l.giao_vien_id = ?`,
+     WHERE kt.id = ? AND l.giao_vien_id = ? ${connection === database ? '' : 'FOR UPDATE'}`,
     [examId, teacherId],
   )
   if (!rows[0]) throw new HttpError(404, 'Không tìm thấy kỳ thi của lớp được phân công')
+  if (Number(rows[0].canceled)) throw new HttpError(409, 'Kỳ thi đã hủy, không thể xem hoặc nhập điểm')
   return rows[0]
 }
 
@@ -231,7 +232,7 @@ teacherRouter.get('/classes/:id/exams', async (request, response) => {
   await ensureOwnedClass(request.auth!.userId, classId)
   const [rows] = await database.query(
     `SELECT id, lop_hoc_id AS classId, ten_ky_thi AS name, ngay_thi AS examDate,
-      han_sua_diem AS deadline FROM ky_thi WHERE lop_hoc_id = ? ORDER BY id DESC`,
+      han_sua_diem AS deadline FROM ky_thi WHERE lop_hoc_id = ? AND da_huy = FALSE ORDER BY id DESC`,
     [classId],
   )
   response.json({ success: true, data: rows })

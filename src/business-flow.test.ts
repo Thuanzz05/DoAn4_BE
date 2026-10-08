@@ -88,9 +88,9 @@ test('luồng ghi danh → buổi học → chuyên cần → điểm → học 
     ;[rows] = await connection.query<RowDataPacket[]>('SELECT id FROM buoi_hoc WHERE lop_hoc_id = ? ORDER BY id', [classes[0].id])
     assert.equal(rows.length, 2)
     const sessionIds = rows.map((row) => Number(row.id))
-    await request(`/sessions/${sessionIds[0]}/cancel`, 'POST', admin)
+    await request(`/sessions/${sessionIds[0]}/cancel`, 'POST', admin, { reason: 'Nghỉ đột xuất, cần xếp học bù' })
     await request(`/classes/${classes[0].id}/start`, 'POST', admin, undefined, 409)
-    await request(`/sessions/${sessionIds[0]}`, 'PATCH', admin, { date: startDate, startTime: '18:00', endTime: '19:00', teacherId: users[1], roomId: room.id })
+    await request(`/sessions/${sessionIds[0]}`, 'PATCH', admin, { date: startDate, startTime: '18:00', endTime: '19:00', teacherId: users[1], roomId: room.id, reason: 'Xếp lại buổi học bù' })
     // Move only isolated test fixtures into the past; never rewrite the real doan4 data.
     await connection.execute("UPDATE buoi_hoc SET bat_dau = DATE_SUB(NOW(), INTERVAL 2 DAY), ket_thuc = DATE_SUB(NOW(), INTERVAL 47 HOUR) WHERE id = ?", [sessionIds[0]])
     await connection.execute("UPDATE buoi_hoc SET bat_dau = DATE_SUB(NOW(), INTERVAL 1 DAY), ket_thuc = DATE_SUB(NOW(), INTERVAL 23 HOUR) WHERE id = ?", [sessionIds[1]])

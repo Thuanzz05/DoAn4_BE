@@ -177,6 +177,10 @@ add('get', '/exams', 'Kỳ thi', 'Danh sách kỳ thi, hạn sửa và trạng t
 add('post', '/exams', 'Kỳ thi', 'Quản trị viên tạo kỳ thi và lưu lịch sử', { status: 201, body: object(examFields, ['classId', 'name', 'reason']) })
 add('patch', '/exams/{id}', 'Kỳ thi', 'Sửa thông tin hoặc gia hạn nhập điểm', { body: object(examFields, ['reason']), description: 'Bắt buộc lý do, lưu trước/sau/người sửa. Không đổi lớp, không xóa hạn đã đặt; hạn mới phải ở tương lai. Khóa khi lớp đã chốt chứng chỉ.' })
 add('get', '/exams/{id}/history', 'Kỳ thi', 'Lịch sử tạo, sửa và gia hạn kỳ thi')
+add('post', '/exams/{id}/cancel', 'Kỳ thi', 'Hủy kỳ thi nháp và giữ lịch sử', {
+  body: object({ reason: { type: 'string', minLength: 1, maxLength: 255 } }, ['reason']),
+  description: 'Chỉ kỳ thi chưa có kết quả và lớp chưa chốt chứng chỉ. Kỳ thi đã hủy không còn tính vào điểm toàn khóa hay điều kiện chứng chỉ; vẫn xem được lịch sử.',
+})
 
 add('get', '/enrollments', 'Ghi danh', 'Danh sách ghi danh')
 add('post', '/enrollments', 'Ghi danh', 'Ghi danh khóa học và tự tạo hóa đơn', {
@@ -203,10 +207,19 @@ add('post', '/schedules', 'Lịch học', 'Tạo lịch hàng tuần', { status:
 add('patch', '/schedules/{id}', 'Lịch học', 'Sửa lịch hàng tuần', { body: object(scheduleFields) })
 add('delete', '/schedules/{id}', 'Lịch học', 'Xóa lịch chưa sinh buổi', { status: 204 })
 add('patch', '/sessions/{id}', 'Lịch học', 'Đổi buổi hoặc xếp lại buổi đã hủy', {
-  body: object({ date, startTime: time, endTime: { ...time, example: '19:30' }, teacherId: id, roomId: id }, ['date', 'startTime', 'endTime', 'teacherId', 'roomId']),
-  description: 'Ngày giờ mới phải ở tương lai; buổi đã bắt đầu không được sửa.',
+  body: object({ date, startTime: time, endTime: { ...time, example: '19:30' }, teacherId: id, roomId: id, reason: { type: 'string', minLength: 1, maxLength: 255 } }, ['date', 'startTime', 'endTime', 'teacherId', 'roomId', 'reason']),
+  description: 'Ngày giờ mới phải ở tương lai; buổi đã bắt đầu không được sửa. Bắt buộc lý do, lưu lịch sử trước/sau.',
 })
-add('post', '/sessions/{id}/cancel', 'Lịch học', 'Hủy buổi chưa bắt đầu')
+add('post', '/sessions/{id}/cancel', 'Lịch học', 'Hủy buổi học chưa có điểm danh', {
+  body: object({ reason: { type: 'string', minLength: 1, maxLength: 255 } }, ['reason']),
+  description: 'Cho xử lý buổi thực tế nghỉ nhưng quên hủy trước giờ. Chỉ lớp đang hoạt động, chưa chốt chứng chỉ và buổi chưa có điểm danh. Giữ buổi và lịch sử để xếp học bù.',
+})
+add('get', '/sessions/{id}/history', 'Lịch học', 'Lịch sử dời, hủy và bổ sung điểm danh')
+add('get', '/sessions/{id}/attendance', 'Lịch học', 'Quản trị viên xem điểm danh để bổ sung dữ liệu còn thiếu')
+add('put', '/sessions/{id}/attendance', 'Lịch học', 'Quản trị viên bổ sung điểm danh có lý do', {
+  body: object({ reason: { type: 'string', minLength: 1, maxLength: 255 }, items: array(object({ enrollmentId: id, status: enumeration('co_mat', 'di_muon', 'vang'), note: nullable({ type: 'string', maxLength: 255 }) }, ['enrollmentId', 'status'])) }, ['reason', 'items']),
+  description: 'Chỉ buổi đã bắt đầu, chưa hủy. Chỉ thêm bản ghi còn thiếu, không ghi đè điểm danh cũ hoặc thay giáo viên/phòng/giờ. Khóa dữ liệu đã chốt chứng chỉ, lưu người bổ sung và lịch sử.',
+})
 
 add('get', '/invoices', 'Học phí', 'Danh sách hóa đơn', {
   parameters: [query('query', text()), query('status', enumeration('chua_thanh_toan', 'da_thanh_toan', 'qua_han', 'da_huy')), query('classId', id), query('from', date), query('to', date)],

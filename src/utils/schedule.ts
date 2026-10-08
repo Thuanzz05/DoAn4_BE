@@ -24,10 +24,6 @@ export function canEditSession(status: string, hasStarted: boolean): boolean {
   return status === 'da_huy' || (status === 'da_len_lich' && !hasStarted)
 }
 
-export function canCancelSession(status: string, hasStarted: boolean): boolean {
-  return status === 'da_len_lich' && !hasStarted
-}
-
 export function shouldSyncTeacherAssignment(
   currentTeacherId: number | null,
   nextTeacherId: number | null,

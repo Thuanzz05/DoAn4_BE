@@ -7,7 +7,7 @@ import { canChangeEnrollmentStatus, ensureEnrollmentClass, type EnrollmentStatus
 import { attendanceRateSql, attendanceStatsJoin } from '../utils/attendance'
 import { parseTuitionAmount } from '../utils/operations'
 import { HttpError } from '../utils/http-error'
-import { canCancelSession, canChangeClassPlan, canEditSession, generateSessionDates, roomCanHostClass, shouldSyncTeacherAssignment, type WeeklySlot } from '../utils/schedule'
+import { canChangeClassPlan, canEditSession, generateSessionDates, roomCanHostClass, shouldSyncTeacherAssignment, type WeeklySlot } from '../utils/schedule'
 
 type ClassStatus = 'sap_khai_giang' | 'dang_hoc' | 'da_ket_thuc' | 'da_huy'
 type ClassRow = RowDataPacket & {
@@ -28,6 +28,7 @@ type ClassRow = RowDataPacket & {
   effectiveSessions: number
   completedSessions: number
   hasStarted: number
+  certificateLocked: number
 }
 type ScheduleRow = RowDataPacket & {
   id: number
@@ -60,6 +61,13 @@ type SessionRow = RowDataPacket & {
   status: 'da_len_lich' | 'da_hoc' | 'da_huy'
   attendanceCount: number
   hasStarted: number
+  missingAttendanceCount: number
+  classStatus: ClassStatus
+  certificateLocked: number
+}
+type AttendanceRow = RowDataPacket & {
+  enrollmentId: number; studentCode: string; studentName: string
+  status: 'co_mat' | 'di_muon' | 'vang' | null; note: string | null; certificateId: number | null
 }
 type EnrollmentRow = RowDataPacket & {
   id: number
@@ -90,7 +98,8 @@ const classSelect = `SELECT l.id, l.ma_lop AS code, l.ten_lop AS name,
   COUNT(DISTINCT bh.id) AS generatedSessions,
   COUNT(DISTINCT CASE WHEN bh.trang_thai <> 'da_huy' THEN bh.id END) AS effectiveSessions,
   COUNT(DISTINCT CASE WHEN bh.trang_thai = 'da_hoc' THEN bh.id END) AS completedSessions,
-  MAX(CASE WHEN bh.trang_thai <> 'da_huy' AND bh.bat_dau <= NOW() THEN 1 ELSE 0 END) AS hasStarted
+  MAX(CASE WHEN bh.trang_thai <> 'da_huy' AND bh.bat_dau <= NOW() THEN 1 ELSE 0 END) AS hasStarted,
+  EXISTS(SELECT 1 FROM chung_chi cc JOIN ghi_danh enrolled ON enrolled.id = cc.ghi_danh_id WHERE enrolled.lop_hoc_id = l.id) AS certificateLocked
   FROM lop_hoc l JOIN khoa_hoc k ON k.id = l.khoa_hoc_id
   LEFT JOIN nguoi_dung gv ON gv.id = l.giao_vien_id
   LEFT JOIN ghi_danh gd ON gd.lop_hoc_id = l.id
@@ -125,8 +134,13 @@ const sessionSelect = `SELECT bh.id, bh.lop_hoc_id AS classId,
   bh.phong_hoc_id AS roomId, p.ma_phong AS roomCode,
   bh.bat_dau AS startsAt, bh.ket_thuc AS endsAt, bh.trang_thai AS status,
   (SELECT COUNT(*) FROM diem_danh dd WHERE dd.buoi_hoc_id = bh.id) AS attendanceCount,
-  (bh.bat_dau <= NOW()) AS hasStarted
+  (bh.bat_dau <= NOW()) AS hasStarted, l.trang_thai AS classStatus,
+  EXISTS(SELECT 1 FROM chung_chi cc JOIN ghi_danh enrolled ON enrolled.id = cc.ghi_danh_id WHERE enrolled.lop_hoc_id = l.id) AS certificateLocked,
+  (SELECT COUNT(*) FROM ghi_danh enrolled WHERE enrolled.lop_hoc_id = bh.lop_hoc_id
+    AND enrolled.trang_thai IN ('dang_hoc', 'hoan_thanh')
+    AND NOT EXISTS(SELECT 1 FROM diem_danh dd WHERE dd.buoi_hoc_id = bh.id AND dd.ghi_danh_id = enrolled.id)) AS missingAttendanceCount
   FROM buoi_hoc bh JOIN nguoi_dung gv ON gv.id = bh.giao_vien_id
+  JOIN lop_hoc l ON l.id = bh.lop_hoc_id
   JOIN phong_hoc p ON p.id = bh.phong_hoc_id`
 
 function text(value: unknown, label: string): string {
@@ -136,7 +150,7 @@ function text(value: unknown, label: string): string {
 
 function positiveInt(value: unknown, label: string): number {
   const parsed = Number(value)
-  if (!Number.isInteger(parsed) || parsed < 1) throw new HttpError(400, `${label} phải là số nguyên dương`)
+  if (!['string', 'number'].includes(typeof value) || !Number.isSafeInteger(parsed) || parsed < 1) throw new HttpError(400, `${label} phải là số nguyên dương`)
   return parsed
 }
 
@@ -151,6 +165,43 @@ function time(value: unknown, label: string): string {
   const parsed = text(value, label)
   if (!/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/.test(parsed)) throw new HttpError(400, `${label} không hợp lệ`)
   return parsed.length === 5 ? `${parsed}:00` : parsed
+}
+
+function sessionReason(value: unknown): string {
+  const reason = text(value, 'Lý do')
+  if (reason.length > 255) throw new HttpError(400, 'Lý do tối đa 255 ký tự')
+  return reason
+}
+
+function sessionSnapshot(session: SessionRow) {
+  return { id: session.id, classId: session.classId, teacherId: session.teacherId, teacherName: session.teacherName,
+    roomId: session.roomId, roomCode: session.roomCode, startsAt: session.startsAt, endsAt: session.endsAt, status: session.status }
+}
+
+function ensureSessionPlanMutable(session: SessionRow): void {
+  if (!['sap_khai_giang', 'dang_hoc'].includes(session.classStatus)) throw new HttpError(409, 'Không được đổi buổi học của lớp đã kết thúc hoặc đã hủy')
+  if (Number(session.certificateLocked)) throw new HttpError(409, 'Lớp đã chốt hồ sơ chứng chỉ; không được đổi buổi học')
+}
+
+async function recordSessionChange(connection: PoolConnection, sessionId: number, actorId: number,
+  action: 'huy' | 'cap_nhat' | 'bo_sung_diem_danh', reason: string, before: unknown, after: unknown): Promise<void> {
+  await connection.execute(
+    `INSERT INTO lich_su_buoi_hoc (buoi_hoc_id, nguoi_thay_doi_id, hanh_dong, ly_do, du_lieu_truoc, du_lieu_sau)
+     VALUES (?, ?, ?, ?, ?, ?)`, [sessionId, actorId, action, reason, JSON.stringify(before), JSON.stringify(after)],
+  )
+}
+
+async function sessionAttendance(connection: QueryConnection, sessionId: number, classId: number, lock = false): Promise<AttendanceRow[]> {
+  const [students] = await connection.query<AttendanceRow[]>(
+    `SELECT gd.id AS enrollmentId, hv.ma_nguoi_dung AS studentCode, hv.ho_ten AS studentName,
+      dd.trang_thai AS status, dd.ghi_chu AS note, cc.id AS certificateId
+     FROM ghi_danh gd JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
+     LEFT JOIN diem_danh dd ON dd.ghi_danh_id = gd.id AND dd.buoi_hoc_id = ?
+     LEFT JOIN chung_chi cc ON cc.ghi_danh_id = gd.id
+     WHERE gd.lop_hoc_id = ? AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')
+     ORDER BY hv.ho_ten, gd.id${lock ? ' FOR UPDATE' : ''}`, [sessionId, classId],
+  )
+  return students
 }
 
 async function ensureTeacher(teacherId: number | null, connection: QueryConnection = database): Promise<void> {
@@ -837,8 +888,82 @@ academicRouter.get('/classes/:id/sessions', async (request, response) => {
   response.json({ success: true, data: rows })
 })
 
+academicRouter.get('/sessions/:id/attendance', async (request, response) => {
+  const sessionId = positiveInt(request.params.id, 'Buổi học')
+  const [rows] = await database.query<SessionRow[]>(`${sessionSelect} WHERE bh.id = ?`, [sessionId])
+  const session = rows[0]
+  if (!session) throw new HttpError(404, 'Không tìm thấy buổi học')
+  if (session.status === 'da_huy' || session.classStatus === 'da_huy') throw new HttpError(409, 'Không được bổ sung điểm danh cho buổi học hoặc lớp đã hủy')
+  if (!Number(session.hasStarted)) throw new HttpError(409, 'Chỉ bổ sung điểm danh sau khi buổi học bắt đầu')
+  const students = await sessionAttendance(database, sessionId, session.classId)
+  response.json({ success: true, data: { session, students } })
+})
+
+academicRouter.put('/sessions/:id/attendance', async (request, response) => {
+  const sessionId = positiveInt(request.params.id, 'Buổi học')
+  const reason = sessionReason(request.body.reason)
+  const items = request.body.items as Array<Record<string, unknown>>
+  if (!Array.isArray(items) || !items.length) throw new HttpError(400, 'Hãy chọn trạng thái cho học viên còn thiếu điểm danh')
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    await lockScheduling(connection)
+    const [rows] = await connection.query<SessionRow[]>(`${sessionSelect} WHERE bh.id = ? FOR UPDATE`, [sessionId])
+    const session = rows[0]
+    if (!session) throw new HttpError(404, 'Không tìm thấy buổi học')
+    if (session.status === 'da_huy' || session.classStatus === 'da_huy') throw new HttpError(409, 'Không được bổ sung điểm danh cho buổi học hoặc lớp đã hủy')
+    if (!Number(session.hasStarted)) throw new HttpError(409, 'Chỉ bổ sung điểm danh sau khi buổi học bắt đầu')
+    const students = await sessionAttendance(connection, sessionId, session.classId, true)
+    const byEnrollment = new Map(students.map((student) => [Number(student.enrollmentId), student]))
+    const received = new Set<number>()
+    for (const item of items) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new HttpError(400, 'Dữ liệu điểm danh không hợp lệ')
+      if (!['string', 'number'].includes(typeof item.enrollmentId)) throw new HttpError(400, 'Ghi danh không hợp lệ')
+      const enrollmentId = positiveInt(item.enrollmentId, 'Ghi danh')
+      if (received.has(enrollmentId)) throw new HttpError(400, 'Danh sách điểm danh bị trùng học viên')
+      const student = byEnrollment.get(enrollmentId)
+      if (!student) throw new HttpError(400, 'Học viên không thuộc lớp này')
+      if (student.certificateId !== null) throw new HttpError(409, 'Học viên đã chốt hồ sơ chứng chỉ; không được bổ sung điểm danh')
+      if (student.status !== null) throw new HttpError(409, 'Chỉ được bổ sung điểm danh còn thiếu; không ghi đè bản ghi hiện có')
+      if (typeof item.status !== 'string' || !['co_mat', 'di_muon', 'vang'].includes(item.status)) throw new HttpError(400, 'Trạng thái điểm danh không hợp lệ')
+      if (item.note !== undefined && item.note !== null && typeof item.note !== 'string') throw new HttpError(400, 'Ghi chú phải là văn bản')
+      const note = typeof item.note === 'string' ? item.note.trim() || null : null
+      if (note && note.length > 255) throw new HttpError(400, 'Ghi chú tối đa 255 ký tự')
+      received.add(enrollmentId)
+      await connection.execute(
+        'INSERT INTO diem_danh (buoi_hoc_id, ghi_danh_id, trang_thai, ghi_chu) VALUES (?, ?, ?, ?)',
+        [sessionId, enrollmentId, item.status, note],
+      )
+    }
+    const remaining = students.length - students.filter((student) => student.status !== null).length - received.size
+    await connection.execute('UPDATE buoi_hoc SET trang_thai = ? WHERE id = ?', [remaining ? 'da_len_lich' : 'da_hoc', sessionId])
+    const [updated] = await connection.query<SessionRow[]>(`${sessionSelect} WHERE bh.id = ?`, [sessionId])
+    const afterStudents = await sessionAttendance(connection, sessionId, session.classId)
+    await recordSessionChange(connection, sessionId, request.auth!.userId, 'bo_sung_diem_danh', reason,
+      { session: sessionSnapshot(session), items: students.filter((student) => student.status !== null) },
+      { session: sessionSnapshot(updated[0]), items: afterStudents.filter((student) => student.status !== null) })
+    await connection.commit()
+    response.json({ success: true, message: 'Đã bổ sung điểm danh, giữ nguyên dữ liệu đã ghi', data: { saved: received.size, remaining } })
+  } catch (error) { await connection.rollback(); throw error }
+  finally { connection.release() }
+})
+
+academicRouter.get('/sessions/:id/history', async (request, response) => {
+  const sessionId = positiveInt(request.params.id, 'Buổi học')
+  const [sessions] = await database.query<SimpleRow[]>('SELECT id FROM buoi_hoc WHERE id = ?', [sessionId])
+  if (!sessions[0]) throw new HttpError(404, 'Không tìm thấy buổi học')
+  const [rows] = await database.query(
+    `SELECT h.id, h.hanh_dong AS action, h.ly_do AS reason, h.du_lieu_truoc AS \`before\`, h.du_lieu_sau AS \`after\`,
+      h.ngay_thay_doi AS changedAt, n.ho_ten AS actorName
+     FROM lich_su_buoi_hoc h JOIN nguoi_dung n ON n.id = h.nguoi_thay_doi_id
+     WHERE h.buoi_hoc_id = ? ORDER BY h.id DESC`, [sessionId],
+  )
+  response.json({ success: true, data: rows })
+})
+
 academicRouter.patch('/sessions/:id', async (request, response) => {
   const sessionId = positiveInt(request.params.id, 'Buổi học')
+  const reason = sessionReason(request.body.reason)
   const connection = await database.getConnection()
   try {
     await connection.beginTransaction()
@@ -846,6 +971,7 @@ academicRouter.patch('/sessions/:id', async (request, response) => {
     const [rows] = await connection.query<SessionRow[]>(`${sessionSelect} WHERE bh.id = ? FOR UPDATE`, [sessionId])
     const current = rows[0]
     if (!current) throw new HttpError(404, 'Không tìm thấy buổi học')
+    ensureSessionPlanMutable(current)
     if (!canEditSession(current.status, Boolean(Number(current.hasStarted)))) {
       throw new HttpError(409, 'Chỉ được sửa buổi chưa diễn ra hoặc xếp lịch bù cho buổi đã hủy')
     }
@@ -868,6 +994,8 @@ academicRouter.patch('/sessions/:id', async (request, response) => {
        trang_thai = 'da_len_lich' WHERE id = ?`,
       [teacherId, roomId, startsAt, endsAt, sessionId],
     )
+    const [after] = await connection.query<SessionRow[]>(`${sessionSelect} WHERE bh.id = ?`, [sessionId])
+    await recordSessionChange(connection, sessionId, request.auth!.userId, 'cap_nhat', reason, sessionSnapshot(current), sessionSnapshot(after[0]))
     await notifyScheduleChange(connection, current.classId, `Buổi học ${current.startsAt.slice(0, 16)} đã ${current.status === 'da_huy' ? 'xếp học bù' : 'dời'} sang ${sessionDate}, ${startTime.slice(0, 5)}-${endTime.slice(0, 5)}.`, [current.teacherId, teacherId])
     await connection.commit()
     const [updated] = await database.query<SessionRow[]>(`${sessionSelect} WHERE bh.id = ?`, [sessionId])
@@ -882,6 +1010,7 @@ academicRouter.patch('/sessions/:id', async (request, response) => {
 
 academicRouter.post('/sessions/:id/cancel', async (request, response) => {
   const sessionId = positiveInt(request.params.id, 'Buổi học')
+  const reason = sessionReason(request.body.reason)
   const connection = await database.getConnection()
   try {
     await connection.beginTransaction()
@@ -889,13 +1018,12 @@ academicRouter.post('/sessions/:id/cancel', async (request, response) => {
     const [rows] = await connection.query<SessionRow[]>(`${sessionSelect} WHERE bh.id = ? FOR UPDATE`, [sessionId])
     const current = rows[0]
     if (!current) throw new HttpError(404, 'Không tìm thấy buổi học')
-    if (!canCancelSession(current.status, Boolean(Number(current.hasStarted)))) {
-      throw new HttpError(409, 'Chỉ được hủy buổi học chưa diễn ra')
-    }
-    await ensureRoomCapacity(current.classId, current.roomId, connection)
+    ensureSessionPlanMutable(current)
+    if (current.status !== 'da_len_lich') throw new HttpError(409, 'Chỉ được hủy buổi chưa có điểm danh, không hủy lại buổi đã hủy')
     if (Number(current.attendanceCount)) throw new HttpError(409, 'Buổi học đã có điểm danh; không được hủy')
     await connection.execute("UPDATE buoi_hoc SET trang_thai = 'da_huy' WHERE id = ?", [sessionId])
-    await notifyScheduleChange(connection, current.classId, `Buổi học ngày ${current.startsAt.slice(0, 10)} đã bị hủy. Trung tâm sẽ cập nhật lịch học bù sau.`, [current.teacherId])
+    await recordSessionChange(connection, sessionId, request.auth!.userId, 'huy', reason, sessionSnapshot(current), { ...sessionSnapshot(current), status: 'da_huy' })
+    await notifyScheduleChange(connection, current.classId, `Buổi học ngày ${current.startsAt.slice(0, 10)} đã bị hủy. Lý do: ${reason}. Trung tâm sẽ cập nhật lịch học bù sau.`, [current.teacherId])
     await connection.commit()
   } catch (error) {
     await connection.rollback()

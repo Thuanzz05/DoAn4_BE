@@ -155,7 +155,7 @@ studentRouter.get('/results', async (request, response) => {
          WHERE old.ky_thi_id = kt.id AND old.ghi_danh_id = gd.id)
      JOIN lop_hoc l ON l.id = kt.lop_hoc_id
      LEFT JOIN ket_qua_thi kq ON kq.ky_thi_id = kt.id AND kq.ghi_danh_id = gd.id
-     WHERE gd.hoc_vien_id = ? AND gd.trang_thai <> 'da_huy'
+     WHERE gd.hoc_vien_id = ? AND gd.trang_thai <> 'da_huy' AND kt.da_huy = FALSE
      ORDER BY kt.ngay_thi DESC, kt.id DESC`,
     [studentId],
   )
@@ -236,12 +236,12 @@ studentRouter.get('/certificate-eligibility', async (request, response) => {
       ${attendanceRateSql} AS attendance, ${attendanceCountColumns},
       (SELECT AVG((kq.nghe + kq.noi + kq.doc + kq.viet) / 4)
         FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
-        WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id
+        WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id AND kt.da_huy = FALSE
           AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
           AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS average,
-      (SELECT COUNT(*) FROM ky_thi kt WHERE kt.lop_hoc_id = gd.lop_hoc_id) AS requiredExams,
+      (SELECT COUNT(*) FROM ky_thi kt WHERE kt.lop_hoc_id = gd.lop_hoc_id AND kt.da_huy = FALSE) AS requiredExams,
       (SELECT COUNT(*) FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
-        WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id
+        WHERE kq.ghi_danh_id = gd.id AND kt.lop_hoc_id = gd.lop_hoc_id AND kt.da_huy = FALSE
           AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL
           AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS completedExams,
       (EXISTS(SELECT 1 FROM hoa_don hd WHERE hd.ghi_danh_id = gd.id AND hd.trang_thai = 'da_thanh_toan')

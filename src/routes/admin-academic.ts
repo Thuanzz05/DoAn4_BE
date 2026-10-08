@@ -87,8 +87,9 @@ adminAcademicRouter.patch('/exams/:id', async (request, response) => {
     }
     await lockExamClass(connection, classId)
     const [rows] = await connection.query<DataRow[]>(
-      'SELECT ten_ky_thi AS name, ngay_thi AS examDate, han_sua_diem AS deadline FROM ky_thi WHERE id = ? FOR UPDATE', [examId],
+      'SELECT ten_ky_thi AS name, ngay_thi AS examDate, han_sua_diem AS deadline, da_huy AS canceled FROM ky_thi WHERE id = ? FOR UPDATE', [examId],
     )
+    if (Number(rows[0].canceled)) throw new HttpError(409, 'Kỳ thi đã hủy, không thể chỉnh sửa hoặc gia hạn')
     const current: ExamDetails = { name: String(rows[0].name), examDate: rows[0].examDate === null ? null : String(rows[0].examDate),
       deadline: rows[0].deadline === null ? null : String(rows[0].deadline) }
     const details = examDetails(request.body, current)
@@ -109,6 +110,42 @@ adminAcademicRouter.patch('/exams/:id', async (request, response) => {
     const [updated] = await connection.query<DataRow[]>(`${academicExamSelect} WHERE kt.id = ?`, [examId])
     await connection.commit()
     response.json({ success: true, data: asAcademicExam(updated[0]) })
+  } catch (error) { await connection.rollback(); throw error }
+  finally { connection.release() }
+})
+
+adminAcademicRouter.post('/exams/:id/cancel', async (request, response) => {
+  const examId = academicId(request.params.id, 'Kỳ thi')
+  const reason = examReason(request.body.reason)
+  const connection = await database.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [lookup] = await connection.query<DataRow[]>('SELECT lop_hoc_id AS classId FROM ky_thi WHERE id = ?', [examId])
+    if (!lookup[0]) throw new HttpError(404, 'Không tìm thấy kỳ thi')
+    const classId = Number(lookup[0].classId)
+    await lockExamClass(connection, classId)
+    const [exams] = await connection.query<DataRow[]>(
+      'SELECT ten_ky_thi AS name, ngay_thi AS examDate, han_sua_diem AS deadline, da_huy AS canceled FROM ky_thi WHERE id = ? FOR UPDATE', [examId],
+    )
+    const current = exams[0]
+    if (Number(current.canceled)) throw new HttpError(409, 'Kỳ thi đã hủy')
+    const [results] = await connection.query<DataRow[]>('SELECT id FROM ket_qua_thi WHERE ky_thi_id = ? LIMIT 1 FOR UPDATE', [examId])
+    if (results.length) throw new HttpError(409, 'Kỳ thi đã có dữ liệu điểm, không thể hủy dù điểm còn trống')
+    const before = { classId, name: current.name, examDate: current.examDate, deadline: current.deadline, canceled: false }
+    const after = { ...before, canceled: true }
+    await connection.execute('UPDATE ky_thi SET da_huy = TRUE WHERE id = ?', [examId])
+    await connection.execute(
+      'INSERT INTO lich_su_ky_thi (ky_thi_id, nguoi_thay_doi_id, hanh_dong, ly_do, du_lieu_truoc, du_lieu_sau) VALUES (?, ?, ?, ?, ?, ?)',
+      [examId, request.auth!.userId, 'huy', reason, JSON.stringify(before), JSON.stringify(after)],
+    )
+    await connection.execute(
+      `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
+       SELECT giao_vien_id, 'Kỳ thi đã hủy', ? FROM lop_hoc WHERE id = ? AND giao_vien_id IS NOT NULL`,
+      [`Kỳ thi ${current.name} đã hủy và không còn tính vào kết quả toàn khóa. Lý do: ${reason}`, classId],
+    )
+    const [updated] = await connection.query<DataRow[]>(`${academicExamSelect} WHERE kt.id = ?`, [examId])
+    await connection.commit()
+    response.json({ success: true, message: 'Đã hủy kỳ thi', data: asAcademicExam(updated[0]) })
   } catch (error) { await connection.rollback(); throw error }
   finally { connection.release() }
 })

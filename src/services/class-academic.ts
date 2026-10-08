@@ -21,6 +21,7 @@ export type AcademicClass = {
 export type AcademicExam = {
   id: number; classId: number; classCode: string; className: string; name: string; examDate: string | null
   deadline: string | null; deadlinePassed: boolean; certificateLocked: boolean; resultsCount: number; completedResults: number
+  canceled: boolean; status: 'dang_hoat_dong' | 'da_huy'
 }
 export type MissingAttendance = {
   sessionId: number; startsAt: string; endsAt: string; teacherName: string; roomCode: string
@@ -35,10 +36,10 @@ export type ClassAcademic = { class: AcademicClass; exams: AcademicExam[]; stude
 
 export const academicExamSelect = `SELECT kt.id, kt.lop_hoc_id AS classId, l.ma_lop AS classCode,
   l.ten_lop AS className, kt.ten_ky_thi AS name, kt.ngay_thi AS examDate, kt.han_sua_diem AS deadline,
+  kt.da_huy AS canceled,
   kt.han_sua_diem IS NOT NULL AND kt.han_sua_diem <= NOW() AS deadlinePassed,
   EXISTS(SELECT 1 FROM chung_chi cc JOIN ghi_danh gd ON gd.id = cc.ghi_danh_id WHERE gd.lop_hoc_id = l.id) AS certificateLocked,
-  (SELECT COUNT(*) FROM ket_qua_thi kq JOIN ghi_danh gd ON gd.id = kq.ghi_danh_id
-    WHERE kq.ky_thi_id = kt.id AND gd.lop_hoc_id = l.id AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')) AS resultsCount,
+  (SELECT COUNT(*) FROM ket_qua_thi kq WHERE kq.ky_thi_id = kt.id) AS resultsCount,
   (SELECT COUNT(*) FROM ket_qua_thi kq JOIN ghi_danh gd ON gd.id = kq.ghi_danh_id
     WHERE kq.ky_thi_id = kt.id AND gd.lop_hoc_id = l.id AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')
       AND kq.nghe IS NOT NULL AND kq.noi IS NOT NULL AND kq.doc IS NOT NULL AND kq.viet IS NOT NULL) AS completedResults
@@ -48,7 +49,8 @@ export function asAcademicExam(row: DataRow): AcademicExam {
   return { id: Number(row.id), classId: Number(row.classId), classCode: String(row.classCode), className: String(row.className),
     name: String(row.name), examDate: row.examDate === null ? null : String(row.examDate), deadline: row.deadline === null ? null : String(row.deadline),
     deadlinePassed: Boolean(Number(row.deadlinePassed)), certificateLocked: Boolean(Number(row.certificateLocked)),
-    resultsCount: Number(row.resultsCount), completedResults: Number(row.completedResults) }
+    resultsCount: Number(row.resultsCount), completedResults: Number(row.completedResults),
+    canceled: Boolean(Number(row.canceled)), status: Number(row.canceled) ? 'da_huy' : 'dang_hoat_dong' }
 }
 
 export async function loadClassAcademic(classId: number, teacherId?: number): Promise<ClassAcademic> {
@@ -73,7 +75,7 @@ async function readClassAcademic(connection: PoolConnection, classId: number, te
     teacherId === undefined ? [classId] : [classId, teacherId],
   )
   if (!classes[0]) throw new HttpError(404, teacherId === undefined ? 'Không tìm thấy lớp học' : 'Không tìm thấy lớp được phân công')
-  const [examRows] = await connection.query<DataRow[]>(`${academicExamSelect} WHERE kt.lop_hoc_id = ? ORDER BY kt.id`, [classId])
+  const [examRows] = await connection.query<DataRow[]>(`${academicExamSelect} WHERE kt.lop_hoc_id = ? AND kt.da_huy = FALSE ORDER BY kt.id`, [classId])
   const exams = examRows.map(asAcademicExam)
   const [roster] = await connection.query<DataRow[]>(
     `SELECT gd.id AS enrollmentId, hv.id AS studentId, hv.ma_nguoi_dung AS studentCode, hv.ho_ten AS studentName,
@@ -98,7 +100,7 @@ async function readClassAcademic(connection: PoolConnection, classId: number, te
     `SELECT kq.ghi_danh_id AS enrollmentId, kq.ky_thi_id AS examId, kq.nghe AS listening, kq.noi AS speaking,
       kq.doc AS reading, kq.viet AS writing FROM ket_qua_thi kq JOIN ky_thi kt ON kt.id = kq.ky_thi_id
       JOIN ghi_danh gd ON gd.id = kq.ghi_danh_id
-      WHERE kt.lop_hoc_id = ? AND gd.lop_hoc_id = kt.lop_hoc_id AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')`, [classId],
+      WHERE kt.lop_hoc_id = ? AND kt.da_huy = FALSE AND gd.lop_hoc_id = kt.lop_hoc_id AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')`, [classId],
   )
   const scores = new Map<number, ExamScore[]>()
   for (const row of scoreRows) {

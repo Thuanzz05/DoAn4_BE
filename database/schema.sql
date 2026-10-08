@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS ghi_danh (
     REFERENCES lop_hoc(id, khoa_hoc_id)
 ) ENGINE=InnoDB;
 
--- Thứ trong tuần: 1 = Thứ hai, 7 = Chủ nhật.
+-- Thứ trong tuần theo MySQL: 1 = Chủ nhật, 2 = Thứ hai, ..., 7 = Thứ bảy.
 CREATE TABLE IF NOT EXISTS lich_hang_tuan (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   lop_hoc_id BIGINT UNSIGNED NOT NULL,
@@ -124,6 +124,20 @@ CREATE TABLE IF NOT EXISTS buoi_hoc (
   CONSTRAINT chk_buoi_gio CHECK (ket_thuc > bat_dau)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS lich_su_buoi_hoc (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  buoi_hoc_id BIGINT UNSIGNED NOT NULL,
+  nguoi_thay_doi_id BIGINT UNSIGNED NOT NULL,
+  hanh_dong VARCHAR(30) NOT NULL,
+  ly_do VARCHAR(255) NOT NULL,
+  du_lieu_truoc JSON NULL,
+  du_lieu_sau JSON NOT NULL,
+  ngay_thay_doi DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_lich_su_buoi_hoc (buoi_hoc_id, ngay_thay_doi),
+  CONSTRAINT fk_lich_su_buoi_hoc FOREIGN KEY (buoi_hoc_id) REFERENCES buoi_hoc(id),
+  CONSTRAINT fk_lich_su_buoi_hoc_nguoi_dung FOREIGN KEY (nguoi_thay_doi_id) REFERENCES nguoi_dung(id)
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS diem_danh (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   buoi_hoc_id BIGINT UNSIGNED NOT NULL,
@@ -142,6 +156,7 @@ CREATE TABLE IF NOT EXISTS ky_thi (
   ten_ky_thi VARCHAR(100) NOT NULL,
   ngay_thi DATE NULL,
   han_sua_diem DATETIME NULL,
+  da_huy BOOLEAN NOT NULL DEFAULT FALSE,
   CONSTRAINT fk_ky_thi_lop FOREIGN KEY (lop_hoc_id) REFERENCES lop_hoc(id)
 ) ENGINE=InnoDB;
 
@@ -149,7 +164,7 @@ CREATE TABLE IF NOT EXISTS lich_su_ky_thi (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   ky_thi_id BIGINT UNSIGNED NOT NULL,
   nguoi_thay_doi_id BIGINT UNSIGNED NOT NULL,
-  hanh_dong ENUM('tao', 'cap_nhat', 'gia_han') NOT NULL,
+  hanh_dong ENUM('tao', 'cap_nhat', 'gia_han', 'huy') NOT NULL,
   ly_do VARCHAR(255) NOT NULL,
   du_lieu_truoc JSON NULL,
   du_lieu_sau JSON NOT NULL,

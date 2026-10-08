@@ -78,6 +78,49 @@ test('học vụ quản trị và giáo viên trên MySQL riêng: kỳ thi, gia 
     const second = await request(`/teacher/classes/${classId}/exams`, teacher, 'POST', { name: 'Thi 2', examDate: '2026-01-04', deadline: future(1) }, 201)
     const historyCreated = await request(`/exams/${second.id}/history`, admin)
     assert.equal(historyCreated[0].action, 'tao')
+    const draft = await request('/exams', admin, 'POST', { classId, name: 'Thi tạo nhầm', reason: 'Kiểm thử hủy kỳ thi nháp' }, 201)
+    assert.equal((await request(`/classes/${classId}/academic`, admin)).students[0].requiredExams, 3)
+    await request(`/exams/${draft.id}/cancel`, teacher, 'POST', { reason: 'Giáo viên không được hủy' }, 403)
+    await request(`/exams/${draft.id}/cancel`, admin, 'POST', { reason: '' }, 400)
+    await request(`/exams/${draft.id}/cancel`, admin, 'POST', { reason: 'x'.repeat(256) }, 400)
+    const canceledExam = await request(`/exams/${draft.id}/cancel`, admin, 'POST', { reason: 'Tạo nhầm kỳ thi, chưa có dữ liệu điểm' })
+    assert.equal(canceledExam.canceled, true)
+    assert.equal(canceledExam.status, 'da_huy')
+    assert.equal((await request(`/classes/${classId}/academic`, admin)).students[0].requiredExams, 2)
+    const canceledHistory = await request(`/exams/${draft.id}/history`, admin)
+    assert.deepEqual(canceledHistory.map((item: any) => item.action), ['huy', 'tao'])
+    assert.equal(canceledHistory[0].before.canceled, false)
+    assert.equal(canceledHistory[0].after.canceled, true)
+    assert.equal((await request(`/exams?classId=${classId}`, admin)).find((item: any) => item.id === draft.id).canceled, true)
+    assert.equal((await request(`/teacher/classes/${classId}/exams`, teacher)).some((item: any) => item.id === draft.id), false)
+    assert.equal((await request('/student/results', student)).exams.some((item: any) => item.examId === draft.id), false)
+    assert.equal((await request('/student/certificate-eligibility', student))[0].requiredExams, 2)
+    await request(`/exams/${draft.id}/cancel`, admin, 'POST', { reason: 'Hủy lại' }, 409)
+    await request(`/exams/${draft.id}`, admin, 'PATCH', { name: 'Sửa sau hủy', reason: 'Không được sửa kỳ đã hủy' }, 409)
+    await request(`/teacher/exams/${draft.id}/results`, teacher, 'GET', undefined, 409)
+    await request(`/teacher/exams/${draft.id}/results`, teacher, 'PUT', { items: [{ enrollmentId: enrollmentIds[0], listening: 8, speaking: 8, reading: 8, writing: 8 }] }, 409)
+    const legacyDraft = await request('/exams', admin, 'POST', { classId, name: 'Kỳ có bản nháp cũ', reason: 'Kiểm thử giữ mọi lịch sử điểm' }, 201)
+    const legacyResultId = await insert('INSERT INTO ket_qua_thi (ky_thi_id, ghi_danh_id, nghe, noi, doc, viet) VALUES (?, ?, NULL, NULL, NULL, NULL)', [legacyDraft.id, enrollmentIds[0]])
+    await request(`/exams/${legacyDraft.id}/cancel`, admin, 'POST', { reason: 'Dù trống cũng đã có lịch sử' }, 409)
+    assert.equal((await request(`/exams?classId=${classId}`, admin)).find((item: any) => item.id === legacyDraft.id).canceled, false)
+    // Remove only this synthetic legacy fixture to keep the remaining class/certificate checks independent.
+    await connection.execute('DELETE FROM ket_qua_thi WHERE id = ? AND ky_thi_id = ?', [legacyResultId, legacyDraft.id])
+    await request(`/exams/${legacyDraft.id}/cancel`, admin, 'POST', { reason: 'Dọn kỳ kiểm thử sau khi bỏ dữ liệu fixture' })
+    const raceExam = await request('/exams', admin, 'POST', { classId, name: 'Kỳ kiểm thử đồng thời', reason: 'Kiểm thử khóa hủy và lưu điểm' }, 201)
+    const [cancelResponse, gradeResponse] = await Promise.all([
+      fetch(`${base}/exams/${raceExam.id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${admin}` }, body: JSON.stringify({ reason: 'Hủy đồng thời với nhập điểm' }) }),
+      fetch(`${base}/teacher/exams/${raceExam.id}/results`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${teacher}` }, body: JSON.stringify({ items: [{ enrollmentId: enrollmentIds[0], listening: 8, speaking: 8, reading: 8, writing: 8 }] }) }),
+    ])
+    assert.ok(cancelResponse.status === 200 && gradeResponse.status === 409 || cancelResponse.status === 409 && gradeResponse.status === 200,
+      'Hủy và lưu điểm đồng thời chỉ được có một thao tác thành công')
+    if (gradeResponse.status === 200) {
+      await connection.execute('DELETE FROM ket_qua_thi WHERE ky_thi_id = ? AND ghi_danh_id = ?', [raceExam.id, enrollmentIds[0]])
+      await request(`/exams/${raceExam.id}/cancel`, admin, 'POST', { reason: 'Dọn kỳ kiểm thử sau khi bỏ dữ liệu fixture' })
+    }
+    const canceledClassId = await insert('INSERT INTO lop_hoc (ma_lop, ten_lop, khoa_hoc_id, giao_vien_id, ngay_khai_giang, so_buoi, si_so_toi_da, trang_thai) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      ['ACADEMIC-CANCELED', 'Lớp đã hủy kiểm thử', courseId, users[1], '2026-01-01', 2, 20, 'da_huy'])
+    const canceledClassExamId = await insert('INSERT INTO ky_thi (lop_hoc_id, ten_ky_thi) VALUES (?, ?)', [canceledClassId, 'Kỳ thi lớp đã hủy'])
+    await request(`/exams/${canceledClassExamId}/cancel`, admin, 'POST', { reason: 'Không được đổi kỳ thi lớp đã hủy' }, 409)
     await request(`/exams/${first.id}`, admin, 'PATCH', { name: 'Thi sửa', reason: '' }, 400)
     await request(`/exams/${first.id}`, admin, 'PATCH', { deadline: null, reason: 'Bỏ hạn' }, 400)
     await connection.execute('UPDATE ky_thi SET han_sua_diem = DATE_SUB(NOW(), INTERVAL 1 HOUR) WHERE id = ?', [first.id])
@@ -96,6 +139,7 @@ test('học vụ quản trị và giáo viên trên MySQL riêng: kỳ thi, gia 
     assert.equal(roster.students.find((item: any) => item.enrollmentId === enrollmentIds[1]).eligibilityReason, 'Chưa hoàn tất học phí')
     await request(`/teacher/exams/${first.id}/results`, teacher, 'PUT', { items: [{ enrollmentId: enrollmentIds[1], listening: 10, speaking: 10, reading: 10, writing: 10 }] }, 400)
     await request(`/teacher/exams/${first.id}/results`, teacher, 'PUT', { items: [{ enrollmentId: enrollmentIds[0], listening: 0, speaking: 0, reading: 0, writing: 0 }] })
+    await request(`/exams/${first.id}/cancel`, admin, 'POST', { reason: 'Không được hủy kỳ đã có điểm thật' }, 409)
     await request(`/teacher/sessions/${sessionIds[0]}/attendance`, teacher, 'PUT', { items: [{ enrollmentId: enrollmentIds[0], status: 'co_mat' }, { enrollmentId: enrollmentIds[1], status: 'vang' }] })
     let details = await request(`/classes/${classId}/academic`, admin)
     const paidStudent = () => details.students.find((item: any) => item.enrollmentId === enrollmentIds[0])
@@ -119,6 +163,7 @@ test('học vụ quản trị và giáo viên trên MySQL riêng: kỳ thi, gia 
     const workbook = new ExcelJS.Workbook()
     await workbook.xlsx.load(Buffer.from(await exported.arrayBuffer()))
     assert.equal(workbook.worksheets.length, 5)
+    assert.equal(workbook.getWorksheet('Chi tiết kỳ thi')!.rowCount, 5, 'Excel chỉ chứa hai kỳ thi còn hiệu lực và hai học viên')
     assert.equal(workbook.getWorksheet('Điểm danh còn thiếu')!.rowCount, 3)
     const studentRows = workbook.getWorksheet('Điểm toàn khóa')!
     const paidRow = [...Array(studentRows.rowCount - 1)].map((_, index) => studentRows.getRow(index + 2)).find((row) => row.getCell(1).value === 'HV-ACADEMIC')!
@@ -127,7 +172,11 @@ test('học vụ quản trị và giáo viên trên MySQL riêng: kỳ thi, gia 
     // Extra canceled fixture tests attendance exclusion; normal makeup reuses one of the two planned rows.
     await connection.execute('DELETE FROM buoi_hoc WHERE id = ? AND lop_hoc_id = ?', [sessionIds[2], classId])
     await request(`/classes/${classId}/complete`, admin, 'POST')
+    const report = await request('/reports?period=year&year=2026', admin)
+    assert.equal(Number(report.classPerformance.find((item: any) => item.id === classId).passed), 1, 'Kỳ thi hủy không làm học viên đủ điểm thành chờ kết quả')
+    assert.equal((await request('/certificates/candidates', admin)).find((item: any) => item.enrollmentId === enrollmentIds[0]).requiredExams, 2)
     await request('/certificates/approve', admin, 'POST', { enrollmentIds: [enrollmentIds[0]] }, 201)
+    await request(`/exams/${first.id}/cancel`, admin, 'POST', { reason: 'Không được hủy kỳ thi lớp đã chốt chứng chỉ' }, 409)
     await request(`/exams/${first.id}`, admin, 'PATCH', { deadline: future(4), reason: 'Không được phép sau chốt' }, 409)
     await request('/exams', admin, 'POST', { classId, name: 'Thi 3', reason: 'Không được phép sau chốt' }, 409)
     await request(`/teacher/classes/${classId}/exams`, teacher, 'POST', { name: 'Thi 3' }, 409)

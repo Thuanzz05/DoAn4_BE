@@ -8,7 +8,7 @@ test('Excel học vụ giữ số 0, điểm trống, dấu phẩy/xuống dòng
     class: { id: 1, code: 'A1', name: 'Lớp A1', courseName: 'Tiếng Anh', language: 'Tiếng Anh', startDate: '2026-01-01',
       sessions: 2, capacity: 30, status: 'dang_hoc', teacherName: 'Giáo viên', enrolled: 1, certificateLocked: false },
     exams: [{ id: 1, classId: 1, classCode: 'A1', className: 'Lớp A1', name: 'Thi 1', examDate: null, deadline: null,
-      deadlinePassed: false, certificateLocked: false, resultsCount: 1, completedResults: 0 }],
+      deadlinePassed: false, certificateLocked: false, resultsCount: 1, completedResults: 0, canceled: false, status: 'dang_hoat_dong' }],
     students: [{ enrollmentId: 1, studentId: 1, studentCode: 'HV01', studentName: 'Nguyễn, "An"\nBình', email: 'test@example.test',
       enrollmentStatus: 'dang_hoc', status: 'dang_hoc', certificateId: null, paid: false, eligible: false, eligibilityReason: 'Chưa hoàn tất học phí',
       expectedAttendance: 2, recordedAttendance: 1, presentAttendance: 1, onTimeAttendance: 0, lateAttendance: 1,
