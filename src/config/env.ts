@@ -26,6 +26,17 @@ function secret(name: string): string {
 
 const port = readPort(process.env.PORT, 3000, 'PORT')
 
+export function clientOrigins(clientUrl: string, environment: string): string[] {
+  const url = new URL(clientUrl)
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('CLIENT_URL phải là URL http hoặc https')
+  const origins = [url.origin]
+  if (environment === 'development' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
+    url.hostname = url.hostname === 'localhost' ? '127.0.0.1' : 'localhost'
+    origins.push(url.origin)
+  }
+  return origins
+}
+
 export const env = {
   port,
   clientUrl: process.env.CLIENT_URL ?? 'http://localhost:5173',

@@ -27,21 +27,28 @@ export async function sendDueInvoiceReminders(classId: number | null = null, poo
   let sent = 0
   let emailed = 0
   let emailFailures = 0
+  let emailSkipped = 0
   for (const invoice of invoices) {
-    const kind = reminderType(Number(invoice.daysLeft))
+    let kind = reminderType(Number(invoice.daysLeft))
     if (!kind) continue
     const connection = await pool.getConnection()
     let created = false
+    let emailClaimed = false
+    let email = invoice.email
+    let fullName = invoice.fullName
     try {
       await connection.beginTransaction()
       const [current] = await connection.query<RowDataPacket[]>(
-        `SELECT hd.id FROM hoa_don hd JOIN ghi_danh gd ON gd.id = hd.ghi_danh_id
+        `SELECT hd.id, hv.email, hv.ho_ten AS fullName,
+           DATEDIFF(hd.han_thanh_toan, CURDATE()) AS daysLeft FROM hoa_don hd JOIN ghi_danh gd ON gd.id = hd.ghi_danh_id
          JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id
          WHERE hd.id = ? AND hd.trang_thai = 'chua_thanh_toan' AND hd.han_thanh_toan = ?
            AND gd.trang_thai NOT IN ('da_huy', 'bao_luu') AND hv.dang_hoat_dong = TRUE FOR UPDATE`,
         [invoice.id, invoice.dueDate],
       )
-      if (current.length) {
+      kind = current.length ? reminderType(Number(current[0].daysLeft)) : null
+      if (kind) {
+        email = String(current[0].email); fullName = String(current[0].fullName)
         const [result] = await connection.execute<ResultSetHeader>(
           'INSERT IGNORE INTO nhac_hoc_phi (hoa_don_id, han_thanh_toan, loai) VALUES (?, ?, ?)',
           [invoice.id, invoice.dueDate, kind],
@@ -53,18 +60,35 @@ export async function sendDueInvoiceReminders(classId: number | null = null, poo
             [invoice.studentId, title, content])
           created = true
         }
+        // ponytail: lease 1 giờ đủ cho SMTP timeout 20 giây; dùng hàng đợi nếu cần nhiều worker hoặc bảo đảm giao email mạnh hơn.
+        const [claim] = await connection.execute<ResultSetHeader>(
+          `UPDATE nhac_hoc_phi SET email_thu_luc = NOW(), email_loi = NULL
+           WHERE hoa_don_id = ? AND han_thanh_toan = ? AND loai = ? AND email_da_gui_luc IS NULL
+             AND (email_thu_luc IS NULL OR email_thu_luc <= DATE_SUB(NOW(), INTERVAL 1 HOUR))`,
+          [invoice.id, invoice.dueDate, kind],
+        )
+        emailClaimed = claim.affectedRows > 0
       }
       await connection.commit()
     } catch (error) { await connection.rollback(); throw error } finally { connection.release() }
-    if (created) {
-      sent += 1
+    if (created) sent += 1
+    if (emailClaimed) {
+      let delivered = false
+      let emailError: string | null = null
       try {
-        if (await emailSender(invoice.email, invoice.fullName, { code: invoice.code, courseName: invoice.courseName,
-          amount: Number(invoice.amount), dueDate: invoice.dueDate, overdue: kind === 'qua_han' })) emailed += 1
-      } catch { emailFailures += 1 }
+        delivered = await emailSender(email, fullName, { code: invoice.code, courseName: invoice.courseName,
+          amount: Number(invoice.amount), dueDate: invoice.dueDate, overdue: kind === 'qua_han' })
+      } catch { emailFailures += 1; emailError = 'Gửi email chưa thành công; hệ thống sẽ thử lại sau 1 giờ.' }
+      if (delivered) emailed += 1
+      else if (!emailError) { emailSkipped += 1; emailError = 'SMTP chưa cấu hình; thông báo trong hệ thống đã được lưu.' }
+      await pool.execute(
+        `UPDATE nhac_hoc_phi SET email_da_gui_luc = IF(?, NOW(), email_da_gui_luc), email_loi = ?
+         WHERE hoa_don_id = ? AND han_thanh_toan = ? AND loai = ?`,
+        [delivered, emailError, invoice.id, invoice.dueDate, kind],
+      )
     }
   }
-  return { sent, emailed, emailFailures }
+  return { sent, emailed, emailFailures, emailSkipped }
 }
 
 export function startInvoiceReminderJob(): () => void {

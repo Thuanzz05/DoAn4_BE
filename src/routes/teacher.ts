@@ -127,12 +127,12 @@ teacherRouter.get('/sessions', async (request, response) => {
     `SELECT bh.id, bh.lop_hoc_id AS classId, l.ma_lop AS classCode, l.ten_lop AS className,
       bh.bat_dau AS startsAt, bh.ket_thuc AS endsAt, bh.trang_thai AS status,
       p.id AS roomId, p.ma_phong AS roomCode,
-      COUNT(DISTINCT CASE WHEN gd.trang_thai IN ('dang_hoc', 'hoan_thanh') THEN gd.id END) AS students,
+      COUNT(DISTINCT gd.id) AS students,
       COUNT(DISTINCT dd.id) AS attendanceMarked
      FROM buoi_hoc bh JOIN lop_hoc l ON l.id = bh.lop_hoc_id
      JOIN phong_hoc p ON p.id = bh.phong_hoc_id
-     LEFT JOIN ghi_danh gd ON gd.lop_hoc_id = l.id
-     LEFT JOIN diem_danh dd ON dd.buoi_hoc_id = bh.id
+     LEFT JOIN ghi_danh gd ON gd.lop_hoc_id = l.id AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')
+     LEFT JOIN diem_danh dd ON dd.buoi_hoc_id = bh.id AND dd.ghi_danh_id = gd.id
      WHERE bh.giao_vien_id = ?
        AND (? IS NULL OR DATE(bh.bat_dau) >= ?)
        AND (? IS NULL OR DATE(bh.bat_dau) <= ?)

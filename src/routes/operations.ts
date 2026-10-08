@@ -46,7 +46,7 @@ export const operationsRouter = Router()
 
 function positiveInt(value: unknown, label: string): number {
   const parsed = Number(value)
-  if (!Number.isInteger(parsed) || parsed < 1) throw new HttpError(400, `${label} phải là số nguyên dương`)
+  if (!['string', 'number'].includes(typeof value) || !Number.isSafeInteger(parsed) || parsed < 1) throw new HttpError(400, `${label} phải là số nguyên dương`)
   return parsed
 }
 
@@ -250,7 +250,8 @@ operationsRouter.patch('/invoices/:id/payment', async (request, response) => {
 
 operationsRouter.patch('/invoices/:id/cancel', async (request, response) => {
   const invoiceId = positiveInt(request.params.id, 'Hóa đơn')
-  const reason = requiredText(request.body.reason, 'Lý do hủy').slice(0, 255)
+  const reason = requiredText(request.body.reason, 'Lý do hủy')
+  if (reason.length > 255) throw new HttpError(400, 'Lý do hủy tối đa 255 ký tự')
   const connection = await database.getConnection()
   try {
     await connection.beginTransaction()

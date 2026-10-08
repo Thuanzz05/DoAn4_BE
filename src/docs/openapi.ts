@@ -228,8 +228,8 @@ add('post', '/invoices', 'Học phí', 'Lập hóa đơn khi chưa có hóa đơ
   status: 201, body: object({ enrollmentId: id, dueDate: date, amount: { type: 'integer', minimum: 1 } }, ['enrollmentId', 'dueDate']),
 })
 add('patch', '/invoices/{id}/payment', 'Học phí', 'Xác nhận đã thu học phí', { body: object({ method: enumeration('tien_mat', 'chuyen_khoan') }, ['method']) })
-add('patch', '/invoices/{id}/cancel', 'Học phí', 'Hủy hóa đơn chưa thanh toán', { body: object({ reason: text('Lập sai hóa đơn') }, ['reason']) })
-add('post', '/invoices/reminders', 'Học phí', 'Nhắc hóa đơn trong 3 ngày tới hoặc quá hạn', { body: object({ classId: id }), description: 'Mỗi hóa đơn/hạn thanh toán chỉ nhắc một lần ở mỗi giai đoạn. Bỏ qua bảo lưu/hủy và tài khoản khóa; lưu thông báo trước khi thử email.' })
+add('patch', '/invoices/{id}/cancel', 'Học phí', 'Hủy hóa đơn chưa thanh toán', { body: object({ reason: { ...text('Lập sai hóa đơn'), maxLength: 255 } }, ['reason']) })
+add('post', '/invoices/reminders', 'Học phí', 'Nhắc hóa đơn trong 3 ngày tới hoặc quá hạn', { body: object({ classId: id }), description: 'Thông báo chỉ tạo một lần cho mỗi hóa đơn/hạn/giai đoạn. Email chưa ghi nhận thành công thử lại tối đa mỗi giờ. Bỏ qua bảo lưu/hủy, tài khoản khóa và hóa đơn đã thanh toán. Trả sent, emailed, emailFailures, emailSkipped; emailSkipped nghĩa là SMTP chưa cấu hình.' })
 
 add('get', '/certificates/verify/{code}', 'Chứng chỉ', 'Xác thực công khai chứng chỉ', { public: true })
 add('get', '/certificates/candidates', 'Chứng chỉ', 'Danh sách hồ sơ và điều kiện chứng chỉ')

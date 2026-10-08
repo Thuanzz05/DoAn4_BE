@@ -13,7 +13,7 @@ Backend Node.js + TypeScript + Express + MySQL cho hệ thống quản lý trung
 Nếu nâng cấp từ phiên bản cũ đã có dữ liệu, chạy một lần
 `database/migrations/20261003_toan_ven_chung_chi.sql` trong MySQL Workbench trước khi khởi động backend.
 Sau đó chạy một lần `database/migrations/20261007_chot_ho_so_chung_chi.sql` để chốt hồ sơ từ lúc duyệt.
-Chạy `npm run migrate:academic-finance` để thêm bảng lịch sử kỳ thi và bảng chống gửi trùng nhắc học phí.
+Chạy `npm run migrate:academic-finance` để thêm lịch sử học vụ, bảng chống trùng thông báo và các cột theo dõi/thử lại email học phí.
 Lệnh này tạo các bảng lịch sử/nhắc phí còn thiếu, thêm cột hủy kỳ thi nháp và lịch sử buổi học.
 Có thể chạy lại an toàn; không xóa dữ liệu, không sửa điểm hoặc điểm danh hiện có.
 
@@ -115,7 +115,9 @@ PDF chứng chỉ được lưu trong `STORAGE_DIR/certificates` và phục vụ
 - Tạo OAuth Web Client ID trong Google Cloud và điền `GOOGLE_CLIENT_ID`.
 - Khi chưa cấu hình SMTP ở môi trường development, API quên mật khẩu trả thêm `devCode` để kiểm thử.
 - Tạo tài khoản giáo viên/học viên gửi email thông tin đăng nhập sau khi lưu; nếu SMTP chưa cấu hình hoặc lỗi, dữ liệu vẫn được giữ và quản trị viên nhận thông tin bàn giao một lần.
-- Đặt `INVOICE_REMINDERS_ENABLED=true` để tự quét học phí lúc khởi động và mỗi giờ khi backend đang chạy. Nhắc một lần khi còn tối đa 3 ngày, một lần khi quá hạn; bỏ qua ghi danh đã hủy/bảo lưu và tài khoản bị khóa. Thông báo trong hệ thống hoạt động dù chưa cấu hình SMTP; email chỉ gửi khi SMTP sẵn sàng. Đổi hạn thanh toán bắt đầu chu kỳ nhắc mới.
+- Đặt `INVOICE_REMINDERS_ENABLED=true` để tự quét học phí lúc khởi động và mỗi giờ khi backend đang chạy. Nhắc một lần khi còn tối đa 3 ngày, một lần khi quá hạn; bỏ qua ghi danh đã hủy/bảo lưu và tài khoản bị khóa. Thông báo trong hệ thống hoạt động dù chưa cấu hình SMTP. Email chưa ghi nhận thành công được thử lại tối đa mỗi giờ, không tạo thêm thông báo; hóa đơn đã thanh toán/hủy không gửi lại. Đổi hạn thanh toán bắt đầu chu kỳ nhắc mới.
+- Theo dõi email qua `nhac_hoc_phi.email_thu_luc`, `email_da_gui_luc`, `email_loi`. SMTP và database không có giao dịch chung: nếu SMTP đã nhận nhưng kết nối bị ngắt, lần thử lại có thể gửi trùng email. Lịch sử cũ chưa có dấu gửi thành công cũng có thể được thử lại một lần; thông báo trong hệ thống vẫn chống trùng.
+- CORS development chấp nhận `localhost` và `127.0.0.1` trên đúng giao thức/port của `CLIENT_URL`; production chỉ chấp nhận origin đã cấu hình, không dùng wildcard.
 
 ## Kiểm tra và build
 

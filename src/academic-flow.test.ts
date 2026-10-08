@@ -46,7 +46,8 @@ test('học vụ quản trị và giáo viên trên MySQL riêng: kỳ thi, gia 
     const hash = await bcrypt.hash('Academic-test-password-123', 4)
     const users: number[] = []
     for (const [code, name, role] of [['QT-ACADEMIC', 'Quản trị kiểm thử', 'quan_tri'], ['GV-ACADEMIC', 'Giáo viên kiểm thử', 'giao_vien'],
-      ['HV-ACADEMIC', 'Học viên đã đóng', 'hoc_vien'], ['HV-ACADEMIC2', 'Học viên chưa đóng', 'hoc_vien'], ['GV-ACADEMIC2', 'Giáo viên khác', 'giao_vien']]) {
+      ['HV-ACADEMIC', 'Học viên đã đóng', 'hoc_vien'], ['HV-ACADEMIC2', 'Học viên chưa đóng', 'hoc_vien'], ['GV-ACADEMIC2', 'Giáo viên khác', 'giao_vien'],
+      ['HV-ACADEMIC3', 'Học viên đã hủy ghi danh', 'hoc_vien']]) {
       users.push(await insert('INSERT INTO nguoi_dung (ma_nguoi_dung, ho_ten, email, mat_khau_bam, vai_tro) VALUES (?, ?, ?, ?, ?)',
         [code, name, `${code}@example.test`, hash, role]))
     }
@@ -141,6 +142,12 @@ test('học vụ quản trị và giáo viên trên MySQL riêng: kỳ thi, gia 
     await request(`/teacher/exams/${first.id}/results`, teacher, 'PUT', { items: [{ enrollmentId: enrollmentIds[0], listening: 0, speaking: 0, reading: 0, writing: 0 }] })
     await request(`/exams/${first.id}/cancel`, admin, 'POST', { reason: 'Không được hủy kỳ đã có điểm thật' }, 409)
     await request(`/teacher/sessions/${sessionIds[0]}/attendance`, teacher, 'PUT', { items: [{ enrollmentId: enrollmentIds[0], status: 'co_mat' }, { enrollmentId: enrollmentIds[1], status: 'vang' }] })
+    const canceledEnrollmentId = await insert('INSERT INTO ghi_danh (hoc_vien_id, khoa_hoc_id, lop_hoc_id, ngay_ghi_danh, trang_thai) VALUES (?, ?, ?, ?, ?)',
+      [users[5], courseId, classId, '2026-01-01', 'da_huy'])
+    await insert('INSERT INTO diem_danh (buoi_hoc_id, ghi_danh_id, trang_thai) VALUES (?, ?, ?)', [sessionIds[0], canceledEnrollmentId, 'co_mat'])
+    const sessionSummary = (await request('/teacher/sessions', teacher)).find((item: any) => item.id === sessionIds[0])
+    assert.equal(Number(sessionSummary.students), 2)
+    assert.equal(Number(sessionSummary.attendanceMarked), 2, 'Điểm danh lịch sử của ghi danh đã hủy không tăng số đã điểm danh hiện tại')
     let details = await request(`/classes/${classId}/academic`, admin)
     const paidStudent = () => details.students.find((item: any) => item.enrollmentId === enrollmentIds[0])
     assert.equal(paidStudent().expectedAttendance, 2)
@@ -152,6 +159,17 @@ test('học vụ quản trị và giáo viên trên MySQL riêng: kỳ thi, gia 
     assert.equal(details.missingAttendance.length, 2)
     assert.equal(details.sessions.find((item: any) => item.id === sessionIds[1]).missingStudents.length, 2)
     assert.equal(details.sessions.find((item: any) => item.id === sessionIds[2]).expectedAttendance, 0)
+    assert.equal(details.missingAttendance.every((item: any) => item.canMarkAttendance), true)
+    let teacherDetails = await request(`/teacher/classes/${classId}/academic`, teacher)
+    assert.equal(teacherDetails.missingAttendance.every((item: any) => item.canMarkAttendance), true)
+    await connection.execute('UPDATE buoi_hoc SET giao_vien_id = ? WHERE id = ?', [users[4], sessionIds[1]])
+    teacherDetails = await request(`/teacher/classes/${classId}/academic`, teacher)
+    assert.equal(teacherDetails.missingAttendance.every((item: any) => !item.canMarkAttendance), true)
+    assert.equal(teacherDetails.sessions.find((item: any) => item.id === sessionIds[1]).canMarkAttendance, false)
+    assert.equal((await request(`/classes/${classId}/academic`, admin)).missingAttendance.every((item: any) => item.canMarkAttendance), true)
+    await request(`/teacher/sessions/${sessionIds[1]}/attendance`, teacher, 'GET', undefined, 404)
+    await request(`/teacher/sessions/${sessionIds[1]}/attendance`, teacher, 'PUT', { items: [{ enrollmentId: enrollmentIds[0], status: 'co_mat' }] }, 404)
+    await connection.execute('UPDATE buoi_hoc SET giao_vien_id = ? WHERE id = ?', [users[1], sessionIds[1]])
     await request(`/teacher/classes/${classId}/academic`, otherTeacher, 'GET', undefined, 404)
     await request(`/classes/${classId}/academic`, student, 'GET', undefined, 403)
     await request(`/teacher/exams/${second.id}/results`, teacher, 'PUT', { items: [{ enrollmentId: enrollmentIds[0], listening: 10, speaking: 10, reading: 10, writing: 10 }] })

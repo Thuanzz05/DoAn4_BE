@@ -36,6 +36,13 @@ test('MySQL riêng: nhắc phí không trùng, thông báo phân trang, báo cá
     const address = server.address()
     assert.ok(address && typeof address !== 'string')
     const base = `http://127.0.0.1:${address.port}/api`
+    const { clientOrigins } = await import('../config/env')
+    for (const origin of clientOrigins(env.clientUrl, env.nodeEnv)) {
+      const response = await fetch(`${base}/health`, { headers: { Origin: origin } })
+      assert.equal(response.headers.get('access-control-allow-origin'), origin)
+    }
+    const untrusted = await fetch(`${base}/health`, { headers: { Origin: 'https://untrusted.example' } })
+    assert.equal(untrusted.headers.get('access-control-allow-origin'), null)
     async function insert(sql: string, params: Array<number | string>) {
       const [result] = await connection.execute<ResultSetHeader>(sql, params)
       return result.insertId
@@ -64,7 +71,7 @@ test('MySQL riêng: nhắc phí không trùng, thông báo phân trang, báo cá
       status === 'hoan_thanh' ? [studentId, newCourseId, classId, status] : [studentId, newCourseId, status]))
     }
     const invoiceId = await insert("INSERT INTO hoa_don (ma_hoa_don,ghi_danh_id,so_tien,ngay_lap,han_thanh_toan) VALUES (?, ?, 1000, DATE_SUB(CURDATE(), INTERVAL 7 DAY), DATE_ADD(CURDATE(), INTERVAL 2 DAY))", ['FIN-HD1', enrollments[0]])
-    await insert("INSERT INTO hoa_don (ma_hoa_don,ghi_danh_id,so_tien,ngay_lap,han_thanh_toan) VALUES (?, ?, 1000, CURDATE(), CURDATE())", ['FIN-HD2', enrollments[1]])
+    const canceledInvoiceId = await insert("INSERT INTO hoa_don (ma_hoa_don,ghi_danh_id,so_tien,ngay_lap,han_thanh_toan) VALUES (?, ?, 1000, CURDATE(), CURDATE())", ['FIN-HD2', enrollments[1]])
     const firstRuns = await Promise.all([1, 2, 3].map(() => sendDueInvoiceReminders(null, database, async () => false)))
     assert.equal(firstRuns.reduce((total, result) => total + result.sent, 0), 1)
     assert.equal((await sendDueInvoiceReminders(null, database, async () => false)).sent, 0)
@@ -79,6 +86,30 @@ test('MySQL riêng: nhắc phí không trùng, thông báo phân trang, báo cá
     assert.equal(notifications.pagination.unread, 2)
     await request('/notifications/read-all', student, 'PATCH', { ids: [notifications.items[0].id] })
     assert.equal((await request('/notifications?paginated=true', student)).pagination.unread, 1)
+    // SMTP lỗi được thử lại, nhưng không lặp thông báo hoặc gửi đồng thời nhiều email.
+    await connection.execute("UPDATE nhac_hoc_phi SET email_thu_luc = DATE_SUB(NOW(), INTERVAL 61 MINUTE) WHERE hoa_don_id = ? AND loai = 'qua_han'", [invoiceId])
+    let emailCalls = 0
+    const retryRuns = await Promise.all([1, 2, 3].map(() => sendDueInvoiceReminders(null, database, async () => { emailCalls += 1; return true })))
+    assert.equal(emailCalls, 1)
+    assert.equal(retryRuns.reduce((total, result) => total + result.sent, 0), 0)
+    assert.equal(retryRuns.reduce((total, result) => total + result.emailed, 0), 1)
+    assert.equal((await request('/notifications?paginated=true', student)).pagination.total, 2)
+    const [[delivery]] = await connection.query<RowDataPacket[]>("SELECT email_da_gui_luc, email_loi FROM nhac_hoc_phi WHERE hoa_don_id = ? AND loai = 'qua_han'", [invoiceId])
+    assert.ok(delivery.email_da_gui_luc)
+    assert.equal(delivery.email_loi, null)
+    await sendDueInvoiceReminders(null, database, async () => { emailCalls += 1; return true })
+    assert.equal(emailCalls, 1, 'email thành công không gửi lại')
+    await connection.execute("UPDATE nhac_hoc_phi SET email_da_gui_luc = NULL, email_thu_luc = NULL WHERE hoa_don_id = ?", [invoiceId])
+    await request(`/invoices/${invoiceId}/payment`, admin, 'PATCH', { method: 'tien_mat' })
+    await sendDueInvoiceReminders(null, database, async () => { emailCalls += 1; return true })
+    assert.equal(emailCalls, 1, 'không thử email cho hóa đơn đã thanh toán')
+    await request(`/invoices/${canceledInvoiceId}/cancel`, admin, 'PATCH', { reason: 'x'.repeat(256) }, 400)
+    await request(`/invoices/${canceledInvoiceId}/cancel`, admin, 'PATCH', { reason: true }, 400)
+    await request('/invoices/reminders', admin, 'POST', { classId: true }, 400)
+    await request('/invoices/reminders', admin, 'POST', { classId: [1] }, 400)
+    await request(`/invoices/${canceledInvoiceId}/cancel`, admin, 'PATCH', { reason: 'x'.repeat(255) })
+    const [[cancellation]] = await connection.query<RowDataPacket[]>('SELECT ly_do_huy FROM hoa_don WHERE id = ?', [canceledInvoiceId])
+    assert.equal(cancellation.ly_do_huy, 'x'.repeat(255))
     await request('/invoices?from=2026-02-30', admin, 'GET', undefined, 400)
     await request('/invoices?from=2026-10-31&to=2026-10-01', admin, 'GET', undefined, 400)
     const classes = await request('/student/classes', student)

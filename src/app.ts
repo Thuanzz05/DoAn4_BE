@@ -2,7 +2,7 @@ import cors from 'cors'
 import express from 'express'
 import swaggerUi from 'swagger-ui-express'
 import { join } from 'node:path'
-import { env } from './config/env'
+import { clientOrigins, env } from './config/env'
 import { openApiDocument } from './docs/openapi'
 import { errorHandler, notFoundHandler } from './middlewares/error-handler'
 import { apiRouter } from './routes'
@@ -12,7 +12,7 @@ export const app = express()
 app.disable('x-powered-by')
 app.use(
   cors({
-    origin: env.clientUrl,
+    origin: clientOrigins(env.clientUrl, env.nodeEnv),
     credentials: true,
   }),
 )

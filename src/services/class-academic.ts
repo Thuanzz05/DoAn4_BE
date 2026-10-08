@@ -4,6 +4,7 @@ import { database } from '../config/database'
 import { attendanceCountColumns, attendanceRateSql, attendanceStatsJoin } from '../utils/attendance'
 import { scoreAverage, summarizeExamScores, type ExamScore } from '../utils/academic'
 import { HttpError } from '../utils/http-error'
+import { canMarkAttendance } from '../utils/schedule'
 
 type DataRow = RowDataPacket & Record<string, string | number | null>
 export type AcademicStudent = {
@@ -25,11 +26,11 @@ export type AcademicExam = {
 }
 export type MissingAttendance = {
   sessionId: number; startsAt: string; endsAt: string; teacherName: string; roomCode: string
-  enrollmentId: number; studentCode: string; studentName: string
+  enrollmentId: number; studentCode: string; studentName: string; canMarkAttendance: boolean
 }
 export type AcademicSession = {
   id: number; startsAt: string; endsAt: string; status: string; teacherName: string; roomCode: string
-  hasStarted: boolean; expectedAttendance: number; recordedAttendance: number; missingAttendance: number
+  hasStarted: boolean; canMarkAttendance: boolean; expectedAttendance: number; recordedAttendance: number; missingAttendance: number
   missingStudents: Array<{ enrollmentId: number; studentCode: string; studentName: string }>
 }
 export type ClassAcademic = { class: AcademicClass; exams: AcademicExam[]; students: AcademicStudent[]; sessions: AcademicSession[]; missingAttendance: MissingAttendance[] }
@@ -123,7 +124,7 @@ async function readClassAcademic(connection: PoolConnection, classId: number, te
       ...summarizeExamScores(exams.map((exam) => exam.id), examResults), examResults }
   })
   const [missingRows] = await connection.query<DataRow[]>(
-    `SELECT bh.id AS sessionId, bh.bat_dau AS startsAt, bh.ket_thuc AS endsAt, gv.ho_ten AS teacherName,
+    `SELECT bh.id AS sessionId, bh.bat_dau AS startsAt, bh.ket_thuc AS endsAt, bh.giao_vien_id AS teacherId, gv.ho_ten AS teacherName,
       p.ma_phong AS roomCode, gd.id AS enrollmentId, hv.ma_nguoi_dung AS studentCode, hv.ho_ten AS studentName
      FROM buoi_hoc bh JOIN ghi_danh gd ON gd.lop_hoc_id = bh.lop_hoc_id AND gd.trang_thai IN ('dang_hoc', 'hoan_thanh')
      JOIN nguoi_dung hv ON hv.id = gd.hoc_vien_id JOIN nguoi_dung gv ON gv.id = bh.giao_vien_id
@@ -134,9 +135,10 @@ async function readClassAcademic(connection: PoolConnection, classId: number, te
   )
   const missingAttendance: MissingAttendance[] = missingRows.map((row) => ({ sessionId: Number(row.sessionId), startsAt: String(row.startsAt),
     endsAt: String(row.endsAt), teacherName: String(row.teacherName), roomCode: String(row.roomCode), enrollmentId: Number(row.enrollmentId),
-    studentCode: String(row.studentCode), studentName: String(row.studentName) }))
+    studentCode: String(row.studentCode), studentName: String(row.studentName),
+    canMarkAttendance: classes[0].status !== 'da_huy' && (teacherId === undefined || Number(row.teacherId) === teacherId) }))
   const [sessionRows] = await connection.query<DataRow[]>(
-    `SELECT bh.id, bh.bat_dau AS startsAt, bh.ket_thuc AS endsAt, bh.trang_thai AS status,
+    `SELECT bh.id, bh.bat_dau AS startsAt, bh.ket_thuc AS endsAt, bh.trang_thai AS status, bh.giao_vien_id AS teacherId,
       gv.ho_ten AS teacherName, p.ma_phong AS roomCode, bh.bat_dau <= NOW() AS hasStarted
      FROM buoi_hoc bh JOIN nguoi_dung gv ON gv.id = bh.giao_vien_id JOIN phong_hoc p ON p.id = bh.phong_hoc_id
      WHERE bh.lop_hoc_id = ? ORDER BY bh.bat_dau, bh.id`, [classId],
@@ -148,6 +150,8 @@ async function readClassAcademic(connection: PoolConnection, classId: number, te
     const expected = Number(row.hasStarted) && row.status !== 'da_huy' ? students.length : 0
     return { id: Number(row.id), startsAt: String(row.startsAt), endsAt: String(row.endsAt), status: String(row.status),
       teacherName: String(row.teacherName), roomCode: String(row.roomCode), hasStarted: Boolean(Number(row.hasStarted)),
+      canMarkAttendance: classes[0].status !== 'da_huy' && canMarkAttendance(String(row.status), Boolean(Number(row.hasStarted)))
+        && (teacherId === undefined || Number(row.teacherId) === teacherId),
       expectedAttendance: expected, recordedAttendance: expected - missing.length, missingAttendance: missing.length,
       missingStudents: missing.map(({ enrollmentId, studentCode, studentName }) => ({ enrollmentId, studentCode, studentName })) }
   })

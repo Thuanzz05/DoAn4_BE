@@ -105,7 +105,7 @@ adminAcademicRouter.patch('/exams/:id', async (request, response) => {
     await connection.execute(
       `INSERT INTO thong_bao (nguoi_dung_id, tieu_de, noi_dung)
        SELECT giao_vien_id, 'Cập nhật kỳ thi', ? FROM lop_hoc WHERE id = ? AND giao_vien_id IS NOT NULL`,
-      [`Kỳ thi ${details.name} đã được cập nhật${details.deadline ? `; hạn sửa điểm: ${details.deadline}` : ''}. Lý do: ${reason}`, classId],
+      [`Kỳ thi ${details.name} đã được cập nhật; ngày thi: ${details.examDate ?? 'chưa đặt'}; hạn sửa điểm: ${details.deadline ?? 'chưa đặt'}. Lý do: ${reason}`, classId],
     )
     const [updated] = await connection.query<DataRow[]>(`${academicExamSelect} WHERE kt.id = ?`, [examId])
     await connection.commit()

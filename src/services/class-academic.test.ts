@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import ExcelJS from 'exceljs'
-import { classAcademicWorkbook, type ClassAcademic } from './class-academic'
+import type { PoolConnection } from 'mysql2/promise'
+import { database } from '../config/database'
+import { classAcademicWorkbook, loadClassAcademic, type ClassAcademic } from './class-academic'
 
 test('Excel học vụ giữ số 0, điểm trống, dấu phẩy/xuống dòng và thiếu điểm danh riêng', async () => {
   const data: ClassAcademic = {
@@ -15,7 +17,7 @@ test('Excel học vụ giữ số 0, điểm trống, dấu phẩy/xuống dòng
       absentAttendance: 0, missingAttendance: 1, attendanceRate: 50, requiredExams: 1, completedExams: 0, average: null,
       examResults: [{ examId: 1, listening: 0, speaking: 0, reading: 0, writing: null, average: null }] }],
     sessions: [], missingAttendance: [{ sessionId: 2, startsAt: '2026-01-02 18:00:00', endsAt: '2026-01-02 19:00:00',
-      teacherName: 'Giáo viên', roomCode: 'P1', enrollmentId: 1, studentCode: 'HV01', studentName: 'Nguyễn, "An"\nBình' }],
+      teacherName: 'Giáo viên', roomCode: 'P1', enrollmentId: 1, studentCode: 'HV01', studentName: 'Nguyễn, "An"\nBình', canMarkAttendance: true }],
   }
   const buffer = await classAcademicWorkbook(data, 'all')
   const workbook = new ExcelJS.Workbook()
@@ -29,4 +31,25 @@ test('Excel học vụ giữ số 0, điểm trống, dấu phẩy/xuống dòng
   assert.equal(workbook.getWorksheet('Chi tiết kỳ thi')!.getCell('E2').value, 0)
   assert.equal(workbook.getWorksheet('Chi tiết kỳ thi')!.getCell('H2').value, null)
   await assert.rejects(() => classAcademicWorkbook(data, 'invalid'))
+})
+
+test('liên kết điểm danh chỉ mở buổi đã bắt đầu thuộc giáo viên; giáo vụ vẫn giữ quyền hiện có', async (t) => {
+  let classStatus = 'dang_hoc'
+  t.mock.method(database, 'getConnection', async () => {
+    const own = { id: 1, sessionId: 1, teacherId: 10, startsAt: '2026-01-01 18:00:00', endsAt: '2026-01-01 20:00:00',
+      teacherName: 'Giáo viên hiện tại', roomCode: 'P1', hasStarted: 1, status: 'da_len_lich' }
+    const previous = { ...own, id: 2, sessionId: 2, teacherId: 20, teacherName: 'Giáo viên trước' }
+    const rows = [[{ id: 7, status: classStatus }], [], [], [], [own, previous],
+      [own, previous, { ...own, id: 3, hasStarted: 0 }, { ...own, id: 4, status: 'da_huy' }]]
+    return { beginTransaction: async () => {}, commit: async () => {}, rollback: async () => {}, release() {},
+      query: async () => [rows.shift(), []] } as unknown as PoolConnection
+  })
+  const teacher = await loadClassAcademic(7, 10)
+  assert.deepEqual(teacher.missingAttendance.map((row) => row.canMarkAttendance), [true, false])
+  assert.deepEqual(teacher.sessions.map((row) => row.canMarkAttendance), [true, false, false, false])
+  const admin = await loadClassAcademic(7)
+  assert.deepEqual(admin.missingAttendance.map((row) => row.canMarkAttendance), [true, true])
+  assert.deepEqual(admin.sessions.map((row) => row.canMarkAttendance), [true, true, false, false])
+  classStatus = 'da_huy'
+  assert.equal((await loadClassAcademic(7)).sessions.some((row) => row.canMarkAttendance), false)
 })
