@@ -13,7 +13,7 @@ Backend Node.js + TypeScript + Express + MySQL cho hệ thống quản lý trung
 Nếu nâng cấp từ phiên bản cũ đã có dữ liệu, chạy một lần
 `database/migrations/20261003_toan_ven_chung_chi.sql` trong MySQL Workbench trước khi khởi động backend.
 Sau đó chạy một lần `database/migrations/20261007_chot_ho_so_chung_chi.sql` để chốt hồ sơ từ lúc duyệt.
-Chạy `npm run migrate:academic-finance` để thêm lịch sử học vụ, bảng chống trùng thông báo và các cột theo dõi/thử lại email học phí.
+Chạy `npm run migrate:academic-finance` để thêm lịch sử học vụ, kiểm tra đầu vào, bảng chống trùng thông báo và các cột theo dõi/thử lại email học phí.
 Lệnh này tạo các bảng lịch sử/nhắc phí còn thiếu, thêm cột hủy kỳ thi nháp và lịch sử buổi học.
 Có thể chạy lại an toàn; không xóa dữ liệu, không sửa điểm hoặc điểm danh hiện có.
 
@@ -56,6 +56,10 @@ Swagger chỉ được mở ở môi trường không phải production, không 
 - `GET/POST/PATCH /api/users`: quản lý giáo viên, học viên và trạng thái tài khoản.
 - `POST /api/users/:id/reset-password`: quản trị viên cấp mật khẩu tạm và vô hiệu hóa phiên đăng nhập cũ.
 - `DELETE /api/users/:id`: xóa tài khoản giáo viên/học viên chưa phát sinh dữ liệu nghiệp vụ.
+- `GET /api/placement-assessments?studentId=`: quản trị viên xem lịch sử đánh giá đầu vào của học viên.
+- `POST /api/placement-assessments`: ghi nhận ngày kiểm tra, ngoại ngữ, điểm 0–10, trình độ, khóa đề xuất không bắt buộc và ghi chú.
+- `POST /api/placement-assessments/:id/cancel`: hủy kết quả nhập sai với lý do; giữ bản ghi, người và thời gian thực hiện.
+- `GET /api/student/placement-assessments`: học viên xem lịch sử của chính mình, kể cả chưa ghi danh.
 - `GET/POST/PATCH/DELETE /api/rooms`: quản lý phòng học.
 - `GET/POST/PATCH /api/classes`: quản lý lớp và phân công giáo viên.
 - `GET/POST/PATCH /api/enrollments`: ghi danh, xếp lớp và tự tạo hóa đơn.
@@ -103,11 +107,17 @@ PDF chứng chỉ được lưu trong `STORAGE_DIR/certificates` và phục vụ
 
 ## Chính sách nghiệp vụ
 
+- Kiểm tra đầu vào là bài đánh giá trực tiếp do quản trị viên ghi nhận, độc lập với kỳ thi của lớp. Cho tạo tài khoản trước ghi danh; trình độ và khóa đề xuất do giáo vụ quyết định, không tự quy đổi điểm sang CEFR. Kết quả đã lưu không sửa/xóa; hủy cần lý do rồi nhập bản ghi mới. Giữ thông tin khóa tại lúc đề xuất kể cả khóa bị sửa/xóa; tài khoản có lịch sử đánh giá chỉ khóa, không xóa.
 - Ghi danh học trọn khóa; xếp/chuyển lớp, bảo lưu hoặc hủy chỉ trước khi lớp bắt đầu học và chưa có lịch sử. Bảo lưu giải phóng chỗ, tiếp tục bằng một lớp chưa bắt đầu của cùng khóa.
 - Buổi hủy không tính vào chuyên cần; học bù xếp lại chính buổi đã hủy. Chuyên cần lấy số buổi thực tế đã đến giờ làm mẫu số, không lấy số bản ghi điểm danh. Thiếu điểm danh thì chưa đủ điều kiện chứng chỉ.
 - Bốn kỹ năng chấm 0–10; `null` là chưa nhập, `0` là điểm thật. Cho lưu bản nháp, chỉ kỳ thi đủ bốn điểm mới hoàn thành. Tất cả kỳ thi có trọng số bằng nhau; chuyên cần 80% là điều kiện chứng chỉ, không phải điều kiện dự thi.
 - Thu trọn học phí bằng tiền mặt/chuyển khoản; chưa hỗ trợ miễn phí, trả góp hay hoàn tiền. Hóa đơn lập lại giữ số tiền đã chốt lúc ghi danh, không phụ thuộc học phí khóa được sửa sau đó.
 - Duyệt chứng chỉ chốt tên/mã/khóa/lớp, điểm, chuyên cần và học phí; khóa thêm kỳ thi và sửa dữ liệu đã chốt. Đính chính thông tin chỉ trước phát hành; chứng chỉ đã cấp không sửa trực tiếp. Cấp lại là tạo lại PDF cùng thông tin, không phải đính chính hoặc cấp chứng chỉ mới.
+
+Luồng giao diện kiểm tra đầu vào: **Học viên → Thêm học viên** (có thể để trống khóa),
+**Hồ sơ → Kiểm tra đầu vào → Ghi nhận kết quả**. Nút **Ghi danh khóa đề xuất** chỉ mở
+form chọn khóa/lớp để quản trị viên kiểm tra và xác nhận; chưa ghi danh hay lập hóa đơn khi bấm nút đó.
+Học viên xem tại **Kết quả học tập → Kiểm tra đầu vào**. Đây không phải hệ thống thi online.
 
 ## Gmail và Google login
 

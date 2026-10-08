@@ -8,7 +8,7 @@ test('Swagger có đúng các route đang được mount và khai báo đầy đ
   const mounts = [
     ['index', 'apiRouter', ''], ['auth', 'authRouter', '/auth'],
     ['courses', 'coursesRouter', '/courses'], ['users', 'usersRouter', '/users'],
-    ['academic', 'academicRouter', ''], ['admin-academic', 'adminAcademicRouter', ''], ['enrollment-import', 'enrollmentImportRouter', '/enrollments/import'],
+    ['academic', 'academicRouter', ''], ['admin-academic', 'adminAcademicRouter', ''], ['placement-assessments', 'placementAssessmentsRouter', ''], ['enrollment-import', 'enrollmentImportRouter', '/enrollments/import'],
     ['operations', 'operationsRouter', ''], ['overview', 'overviewRouter', ''],
     ['teacher', 'teacherRouter', '/teacher'], ['student', 'studentRouter', '/student'], ['ai', 'aiRouter', '/ai'],
   ]

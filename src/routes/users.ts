@@ -23,6 +23,7 @@ type UserRow = RowDataPacket & {
   specialty: string | null
   createdAt: string
   activeClasses: number
+  hasPlacementHistory: number
 }
 
 export const usersRouter = Router()
@@ -33,6 +34,7 @@ const selectUsers = `SELECT n.id, n.ma_nguoi_dung AS code, n.ho_ten AS fullName,
   n.dang_hoat_dong AS active, n.ngay_sinh AS birthDate,
   n.ngon_ngu_giang_day AS teachingLanguage, n.chuyen_mon AS specialty,
   n.ngay_tao AS createdAt,
+  EXISTS(SELECT 1 FROM kiem_tra_dau_vao kt WHERE kt.hoc_vien_id = n.id) AS hasPlacementHistory,
   COUNT(DISTINCT CASE WHEN l.trang_thai IN ('sap_khai_giang', 'dang_hoc') THEN l.id END) AS activeClasses
   FROM nguoi_dung n LEFT JOIN lop_hoc l ON l.giao_vien_id = n.id
     OR EXISTS (SELECT 1 FROM buoi_hoc bh WHERE bh.lop_hoc_id = l.id AND bh.giao_vien_id = n.id
@@ -225,6 +227,12 @@ usersRouter.delete('/:id', async (request, response) => {
   const connection = await database.getConnection()
   try {
     await connection.beginTransaction()
+    await connection.query('SELECT id FROM nguoi_dung WHERE id = ? FOR UPDATE', [userId])
+    const [placementHistory] = await connection.query<RowDataPacket[]>(
+      'SELECT id FROM kiem_tra_dau_vao WHERE hoc_vien_id = ? OR nguoi_danh_gia_id = ? OR nguoi_huy_id = ? LIMIT 1',
+      [userId, userId, userId],
+    )
+    if (placementHistory.length) throw new HttpError(409, 'Không thể xóa tài khoản có lịch sử kiểm tra đầu vào; hãy khóa tài khoản để giữ lịch sử')
     await connection.execute('DELETE FROM ma_dat_lai_mat_khau WHERE nguoi_dung_id = ?', [userId])
     await connection.execute('DELETE FROM thong_bao WHERE nguoi_dung_id = ?', [userId])
     await connection.execute('DELETE FROM nguoi_dung WHERE id = ?', [userId])

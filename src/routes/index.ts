@@ -8,6 +8,7 @@ import { coursesRouter } from './courses'
 import { enrollmentImportRouter } from './enrollment-import'
 import { operationsRouter } from './operations'
 import { overviewRouter } from './overview'
+import { placementAssessmentsRouter } from './placement-assessments'
 import { studentRouter } from './student'
 import { teacherRouter } from './teacher'
 import { usersRouter } from './users'
@@ -27,6 +28,7 @@ apiRouter.use('/auth', authRouter)
 apiRouter.use('/courses', coursesRouter)
 apiRouter.use('/users', usersRouter)
 apiRouter.use('/enrollments/import', enrollmentImportRouter)
+apiRouter.use(placementAssessmentsRouter)
 apiRouter.use(academicRouter)
 apiRouter.use(adminAcademicRouter)
 apiRouter.use(operationsRouter)

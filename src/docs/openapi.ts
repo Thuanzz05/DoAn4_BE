@@ -29,7 +29,7 @@ const query = (name: string, schema: Schema, required = false): Parameter => ({ 
 const paths: Record<string, Partial<Record<Method, Record<string, unknown>>>> = {}
 const roles: Record<string, string> = {
   'Người dùng': 'quan_tri', 'Khóa học': 'quan_tri', 'Phòng học': 'quan_tri',
-  'Lớp học': 'quan_tri', 'Kỳ thi': 'quan_tri', 'Ghi danh': 'quan_tri', 'Lịch học': 'quan_tri',
+  'Lớp học': 'quan_tri', 'Kỳ thi': 'quan_tri', 'Kiểm tra đầu vào': 'quan_tri', 'Ghi danh': 'quan_tri', 'Lịch học': 'quan_tri',
   'Học phí': 'quan_tri', 'Chứng chỉ': 'quan_tri', 'Báo cáo': 'quan_tri',
   'Giáo viên': 'giao_vien', 'Học viên': 'hoc_vien',
 }
@@ -150,6 +150,23 @@ add('patch', '/users/{id}/status', 'Người dùng', 'Khóa hoặc mở tài kho
 })
 add('post', '/users/{id}/reset-password', 'Người dùng', 'Cấp mật khẩu tạm cho người dùng', { description: 'Có thể gửi email thật và vô hiệu hóa phiên cũ. Không dùng API này chỉ để xem thử.' })
 add('delete', '/users/{id}', 'Người dùng', 'Xóa người dùng chưa có dữ liệu nghiệp vụ', { status: 204 })
+
+const placementFields = {
+  studentId: id, assessedAt: { ...date, example: '2026-10-08' }, language: { ...text('Tiếng Anh'), minLength: 1, maxLength: 50 },
+  score: { type: 'number', minimum: 0, maximum: 10, multipleOf: 0.01, example: 6.5 },
+  level: { ...text('A2'), minLength: 1, maxLength: 50 }, recommendedCourseId: nullable(id), note: nullable({ ...text(), maxLength: 1000 }),
+}
+add('get', '/placement-assessments', 'Kiểm tra đầu vào', 'Lịch sử đánh giá đầu vào của học viên', {
+  parameters: [query('studentId', id, true)], description: 'Bao gồm kết quả đã hủy; không yêu cầu học viên đã ghi danh hoặc được xếp lớp.',
+})
+add('post', '/placement-assessments', 'Kiểm tra đầu vào', 'Ghi nhận kết quả kiểm tra trực tiếp', {
+  status: 201, body: object(placementFields, ['studentId', 'assessedAt', 'language', 'score', 'level']),
+  description: 'Ngày kiểm tra không được ở tương lai. Điểm 0–10, tối đa hai chữ số thập phân; trình độ do giáo vụ đánh giá, không tự quy đổi CEFR. Khóa đề xuất không bắt buộc, phải đang mở và cùng ngoại ngữ. Lưu thông tin khóa tại thời điểm ghi nhận; không tự ghi danh, tạo hóa đơn hoặc đổi điểm thi/chứng chỉ.',
+})
+add('post', '/placement-assessments/{id}/cancel', 'Kiểm tra đầu vào', 'Hủy kết quả nhập sai, giữ lịch sử', {
+  body: object({ reason: { ...text(), minLength: 1, maxLength: 255 } }, ['reason']),
+  description: 'Không sửa/xóa kết quả cũ. Hủy cần lý do và lưu người thực hiện, thời gian; nhập lại thành bản ghi mới. Kết quả đã hủy không dùng để tư vấn ghi danh.',
+})
 
 const roomFields = { code: text('P101'), capacity: { ...id, example: 30 } }
 add('get', '/rooms', 'Phòng học', 'Danh sách phòng học')
@@ -288,6 +305,9 @@ add('get', '/student/dashboard', 'Học viên', 'Dashboard học viên')
 add('get', '/student/classes', 'Học viên', 'Các lớp và ghi danh của mình')
 add('get', '/student/sessions', 'Học viên', 'Lịch học của mình', { parameters: dateRange })
 add('get', '/student/results', 'Học viên', 'Điểm thi và lịch sử điểm danh')
+add('get', '/student/placement-assessments', 'Học viên', 'Lịch sử kiểm tra đầu vào của tài khoản hiện tại', {
+  description: 'Chỉ đọc kết quả của học viên đang đăng nhập, kể cả chưa ghi danh; không nhận studentId để đọc hồ sơ người khác.',
+})
 add('get', '/student/invoices', 'Học viên', 'Hóa đơn học phí của mình')
 add('get', '/student/certificates', 'Học viên', 'Chứng chỉ của mình')
 add('get', '/student/certificate-downloads', 'Học viên', 'Lịch sử yêu cầu tải chứng chỉ')
@@ -307,7 +327,7 @@ export const openApiDocument = {
   },
   servers: [{ url: '/api', description: 'Backend đang mở — cùng máy chủ với Swagger' }],
   security: [{ bearerAuth: [] }],
-  tags: ['Hệ thống', 'Đăng nhập', 'Khóa học', 'Người dùng', 'Phòng học', 'Lớp học', 'Kỳ thi', 'Ghi danh', 'Lịch học', 'Học phí', 'Chứng chỉ', 'Báo cáo', 'Thông báo', 'Giáo viên', 'Học viên', 'AI tư vấn'].map((name) => ({ name })),
+  tags: ['Hệ thống', 'Đăng nhập', 'Khóa học', 'Người dùng', 'Kiểm tra đầu vào', 'Phòng học', 'Lớp học', 'Kỳ thi', 'Ghi danh', 'Lịch học', 'Học phí', 'Chứng chỉ', 'Báo cáo', 'Thông báo', 'Giáo viên', 'Học viên', 'AI tư vấn'].map((name) => ({ name })),
   paths,
   components: {
     securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT', description: 'Dán data.token từ API đăng nhập; không thêm chữ Bearer.' } },
