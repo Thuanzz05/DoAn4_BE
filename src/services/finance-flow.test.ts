@@ -25,10 +25,10 @@ test('MySQL riêng: nhắc phí không trùng, thông báo phân trang, báo cá
   try {
     const schema = (await readFile(join(process.cwd(), 'database/schema.sql'), 'utf8')).replace(/\bdoan4\b/g, dbName)
     await connection.query(schema)
-    const { app } = await import('../app')
-    const { database } = await import('../config/database')
-    const { env } = await import('../config/env')
-    const { sendDueInvoiceReminders } = await import('./invoice-reminders')
+    const { app } = await import('../app.js')
+    const { database } = await import('../config/database.js')
+    const { env } = await import('../config/env.js')
+    const { sendDueInvoiceReminders } = await import('./invoice-reminders.js')
     closePool = () => database.end()
     const server = app.listen(0, '127.0.0.1')
     await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject) })
@@ -36,7 +36,7 @@ test('MySQL riêng: nhắc phí không trùng, thông báo phân trang, báo cá
     const address = server.address()
     assert.ok(address && typeof address !== 'string')
     const base = `http://127.0.0.1:${address.port}/api`
-    const { clientOrigins } = await import('../config/env')
+    const { clientOrigins } = await import('../config/env.js')
     for (const origin of clientOrigins(env.clientUrl, env.nodeEnv)) {
       const response = await fetch(`${base}/health`, { headers: { Origin: origin } })
       assert.equal(response.headers.get('access-control-allow-origin'), origin)

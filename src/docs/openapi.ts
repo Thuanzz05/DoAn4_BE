@@ -314,7 +314,7 @@ add('get', '/student/certificate-downloads', 'Học viên', 'Lịch sử yêu c�
 add('get', '/student/certificate-eligibility', 'Học viên', 'Điều kiện và lý do chưa đạt chứng chỉ')
 add('post', '/student/certificates/{id}/download', 'Học viên', 'Ghi nhận yêu cầu tải PDF chứng chỉ', { status: 201, description: 'Trả JSON gồm pdfPath và mã xác thực, không trả trực tiếp nội dung PDF.' })
 add('post', '/ai/tu-van-khoa-hoc', 'AI tư vấn', 'Tư vấn khóa học đang mở', {
-  public: true, body: object({ question: { type: 'string', minLength: 5, maxLength: 1000, example: 'Tôi mới bắt đầu học tiếng Anh, nên chọn khóa nào?' } }, ['question']),
+  public: true, body: object({ question: { type: 'string', minLength: 1, maxLength: 1000, example: 'Tôi mới bắt đầu học tiếng Anh, nên chọn khóa nào?' } }, ['question']),
   description: 'Cần cấu hình GEMINI_API_KEY. Nội dung gửi tới dịch vụ AI; tối đa 20 yêu cầu/15 phút.',
 })
 

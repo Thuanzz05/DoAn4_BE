@@ -20,8 +20,8 @@ test('ngoại lệ buổi học trên MySQL riêng: bổ sung thiếu, hủy bu�
   let closePool: (() => Promise<void>) | undefined
   try {
     await connection.query((await readFile(join(process.cwd(), 'database/schema.sql'), 'utf8')).replace(/\bdoan4\b/g, isolatedDatabase))
-    const { app } = await import('./app')
-    const { database } = await import('./config/database')
+    const { app } = await import('./app.js')
+    const { database } = await import('./config/database.js')
     closePool = () => database.end()
     const server = app.listen(0, '127.0.0.1')
     await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject) })

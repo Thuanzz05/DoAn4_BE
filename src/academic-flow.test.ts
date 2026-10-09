@@ -23,8 +23,8 @@ test('học vụ quản trị và giáo viên trên MySQL riêng: kỳ thi, gia 
   try {
     const schema = (await readFile(join(process.cwd(), 'database/schema.sql'), 'utf8')).replace(/\bdoan4\b/g, isolatedDatabase)
     await connection.query(schema)
-    const { app } = await import('./app')
-    const { database } = await import('./config/database')
+    const { app } = await import('./app.js')
+    const { database } = await import('./config/database.js')
     closePool = () => database.end()
     const server = app.listen(0, '127.0.0.1')
     await new Promise<void>((resolve, reject) => { server.once('listening', resolve); server.once('error', reject) })

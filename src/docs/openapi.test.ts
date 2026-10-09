@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { openApiDocument } from './openapi'
+import { geminiFailure } from '../routes/ai'
 
 test('Swagger có đúng các route đang được mount và khai báo đầy đủ tham số đường dẫn', () => {
   const mounts = [
@@ -43,6 +44,8 @@ test('Swagger giữ Bearer JWT cho API nội bộ và không khai báo XLSX thà
   assert.equal(openApiDocument.paths['/classes'].get?.security, undefined)
   assert.equal(openApiDocument.paths['/teacher/sessions/{id}/attendance'].put?.security, undefined)
   assert.equal(openApiDocument.paths['/student/invoices'].get?.security, undefined)
+  const aiBody = openApiDocument.paths['/ai/tu-van-khoa-hoc'].post?.requestBody as { content: { 'application/json': { schema: { properties: { question: { minLength: number } } } } } }
+  assert.equal(aiBody.content['application/json'].schema.properties.question.minLength, 1)
   const body = openApiDocument.paths['/enrollments/import/preview'].post?.requestBody as { content: Record<string, unknown> }
   assert.deepEqual(Object.keys(body.content), ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'])
   function checkReferences(value: unknown): void {
@@ -59,4 +62,11 @@ test('Swagger giữ Bearer JWT cho API nội bộ và không khai báo XLSX thà
     }
   }
   checkReferences(openApiDocument)
+})
+
+test('lỗi Gemini được chuẩn hóa trước khi trả về giao diện', () => {
+  const busy = geminiFailure(503, 'Provider message')
+  assert.equal(busy.status, 503)
+  assert.equal(busy.message, 'Dịch vụ tư vấn đang bận, vui lòng thử lại sau ít phút.')
+  assert.equal(geminiFailure(400, 'API key không hợp lệ').message, 'API key không hợp lệ')
 })

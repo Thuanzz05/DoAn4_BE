@@ -17,7 +17,7 @@ test('gửi tài khoản không lộ mật khẩu khi thành công, có phương
     },
   }))
   try {
-    const { deliverAccountInformation, sendInvoiceReminder } = await import('./mailer')
+    const { deliverAccountInformation, sendInvoiceReminder } = await import('./mailer.js')
     const delivered = await deliverAccountInformation('student@example.test', 'Học viên thử', 'Temp-test-123', 'hoc_vien')
     assert.deepEqual(delivered, { emailSent: true })
     assert.equal(sent[0].to, 'student@example.test')

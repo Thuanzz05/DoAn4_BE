@@ -20,6 +20,13 @@ type GeminiResponse = {
   error?: { message?: string }
 }
 
+export function geminiFailure(status: number, providerMessage?: string): HttpError {
+  if (status === 429 || status === 503) {
+    return new HttpError(503, 'Dịch vụ tư vấn đang bận, vui lòng thử lại sau ít phút.')
+  }
+  return new HttpError(502, providerMessage ?? 'Dịch vụ AI đang lỗi')
+}
+
 export const aiRouter = Router()
 
 aiRouter.post(
@@ -33,7 +40,7 @@ aiRouter.post(
   }),
   async (request, response) => {
     const question = typeof request.body.question === 'string' ? request.body.question.trim() : ''
-    if (question.length < 5 || question.length > 1000) throw new HttpError(400, 'Câu hỏi phải từ 5 đến 1000 ký tự')
+    if (!question || question.length > 1000) throw new HttpError(400, 'Câu hỏi phải từ 1 đến 1000 ký tự')
     if (!env.geminiApiKey) throw new HttpError(503, 'AI chưa được cấu hình GEMINI_API_KEY')
 
     const [courses] = await database.query<CourseRow[]>(
@@ -54,7 +61,7 @@ aiRouter.post(
       },
     )
     const body = (await aiResponse.json()) as GeminiResponse
-    if (!aiResponse.ok) throw new HttpError(502, body.error?.message ?? 'Dịch vụ AI đang lỗi')
+    if (!aiResponse.ok) throw geminiFailure(aiResponse.status, body.error?.message)
     const answer = body.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('').trim()
     if (!answer) throw new HttpError(502, 'AI không trả về nội dung tư vấn')
     response.json({ success: true, data: { answer } })

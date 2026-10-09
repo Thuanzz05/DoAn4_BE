@@ -26,8 +26,8 @@ async function invoke(router: Router, path: string, body: Record<string, unknown
 
 test('mật khẩu giữ nguyên khoảng trắng khi tạo/đổi/đăng nhập; sai mật khẩu hiện tại không hết phiên', async (context) => {
   context.mock.method(nodemailer, 'createTransport', () => ({ sendMail: async () => ({ accepted: [] }) }))
-  const { authRouter } = await import('./auth')
-  const { usersRouter } = await import('./users')
+  const { authRouter } = await import('./auth.js')
+  const { usersRouter } = await import('./users.js')
   const user = { id: 1, ma_nguoi_dung: 'HV-TEST', ho_ten: 'Học viên thử', email: 'test@example.test',
     so_dien_thoai: '0900000001', mat_khau_bam: '', vai_tro: 'hoc_vien', dang_hoat_dong: 1, phien_ban_dang_nhap: 0 }
   context.mock.method(database, 'query', (async () => [[user], []]) as typeof database.query)
@@ -56,7 +56,7 @@ test('mật khẩu giữ nguyên khoảng trắng khi tạo/đổi/đăng nhập
 })
 
 test('OTP chỉ đổi mật khẩu một lần khi hai yêu cầu đồng thời; dùng lại/hết hạn/quá số lần đều bị chặn', async (context) => {
-  const { authRouter } = await import('./auth')
+  const { authRouter } = await import('./auth.js')
   const code = '123456'
   const reset = { id: 10, nguoi_dung_id: 1, so_lan_nhap_sai: 0,
     ma_hmac: createHmac('sha256', env.otpSecret).update(`1:${code}`).digest('hex') }
@@ -127,7 +127,7 @@ test('OTP chỉ đổi mật khẩu một lần khi hai yêu cầu đồng thờ
 })
 
 test('OTP bị khóa đúng ở lần nhập sai thứ năm, không tăng số lần sau khi đã dùng', async (context) => {
-  const { authRouter } = await import('./auth')
+  const { authRouter } = await import('./auth.js')
   let attempts = 0
   let used = false
   context.mock.method(database, 'query', (async () => [[...(!used ? [{ id: 10, nguoi_dung_id: 1,
